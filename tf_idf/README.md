@@ -17,12 +17,12 @@ It analyzes:
 
 ---
 ## High level flowchart
-
+```mermaid
 flowchart TD
-    A[Start Script] --> B[Parse Arguments<br>Get Repo Path]
+    A[Start Script] --> B[Parse Arguments - Get Repo Path]
     B --> C[Validate Git Repo]
-    C --> D[Get Historical Co-occurrence Matrix<br>From git log]
-    D --> E[Get Changed Files<br>From git status]
+    C --> D[Get Historical Co-occurrence Matrix - From git log]
+    D --> E[Get Changed Files - From git status]
     E --> F{Changed Files Exist?}
     F -- No --> Z[Exit - No Changes Detected]
     F -- Yes --> G[Extract Structural Features]
@@ -33,13 +33,13 @@ flowchart TD
     J --> K[Group Files by Cluster ID]
     K --> L{Large Cluster?}
     L -- No --> M[Add to Final Clusters]
-    L -- Yes --> N[Secondary Cluster<br>HDBSCAN with finer params]
+    L -- Yes --> N[Secondary Cluster - HDBSCAN with finer params]
     N --> O[Group Files by Sub-Cluster]
     O --> P[Add Sub-Clusters to Final Clusters]
     M & P --> Q[Generate Labels for Final Clusters]
     Q --> R[Print Results with Labels & File Lists]
     R --> S[End Script]
-
+````
 
 ## 🚀 How to Run
 
