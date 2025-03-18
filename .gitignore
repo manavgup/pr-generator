@@ -1,0 +1,111 @@
+# Python virtual environments
+venv/
+venv_py312/
+env/
+.env/
+.venv/
+ENV/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Cache files
+cache/
+.cache/
+*.pkl
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+
+# Log files
+*.log
+
+# Local configuration
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.python-version
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# API keys and secrets
+secrets/
+config/*.env
+
+# Output files that don't need to be version controlled
+output/*.json
+output/tf_idf/*.json  # raw runs (ignored)
+
+# Allow sample outputs in examples/
+!tf_idf/examples/*.json
+!output_examples/*.json
+
+# HTML output (if generated)
+*.html
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+
+*.txt
+# But allow curated example text outputs
+!tf_idf/examples/*.txt
+!output_examples/*.txt
+
+*.csv
+*.png
+*.json
+
+# Old Source code that is being refactored
+old_src/

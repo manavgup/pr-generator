@@ -1,0 +1,153 @@
+Analyzing git history in /Users/mg/mg-work/manav/work/ai-experiments/rag_modulo...
+
+Auto-generated PR Categories for /Users/mg/mg-work/manav/work/ai-experiments/rag_modulo:
+
+=== Tests Coverage Gitignore Js Py Midmodule ===
+Files (9):
+  .coverage
+  .gitignore
+  backend/core/authentication_middleware.py
+  backend/rag_solution/router/llm_provider_router.py
+  backend/rag_solution/schemas/search_schema.py
+  ...and 4 more
+
+=== Js Py Deepmodule ===
+Files (2):
+  backend/auth/oidc.py
+  webui/src/api/api.js
+
+=== Test Chunking.Py Test Weaviate Store.Py  ===
+Files (93):
+  backend/core/authorization.py
+  backend/pyproject.toml
+  backend/pytest.ini
+  backend/rag_solution/models/llm_provider.py
+  backend/rag_solution/repository/llm_parameters_repository.py
+  ...and 88 more
+
+=== Tests Test Question Service Providers.Py ===
+Files (3):
+  backend/core/custom_exceptions.py
+  backend/tests/service/test_question_service_providers.py
+  backend/rag_solution/router/user_routes/provider_routes.py
+
+=== Models Py Deepmodule ===
+Files (4):
+  backend/main.py
+  backend/rag_solution/evaluation/llm_as_judge_evals.py
+  backend/rag_solution/models/llm_parameters.py
+  backend/rag_solution/schemas/llm_parameters_schema.py
+
+=== Py Deepmodule ===
+Files (2):
+  backend/rag_solution/data_ingestion/document_processor.py
+  backend/rag_solution/data_ingestion/pdf_processor.py
+
+=== Py Deepmodule ===
+Files (5):
+  backend/rag_solution/generation/providers/anthropic.py
+  backend/rag_solution/generation/providers/base.py
+  backend/rag_solution/generation/providers/factory.py
+  backend/rag_solution/generation/providers/openai.py
+  backend/rag_solution/generation/providers/watsonx.py
+
+=== Models Services Py Deepmodule ===
+Files (16):
+  backend/rag_solution/models/file.py
+  backend/rag_solution/models/user.py
+  backend/rag_solution/repository/collection_repository.py
+  backend/rag_solution/repository/team_repository.py
+  backend/rag_solution/repository/user_collection_repository.py
+  ...and 11 more
+
+=== Models Py Deepmodule ===
+Files (3):
+  backend/rag_solution/models/prompt_template.py
+  backend/rag_solution/repository/prompt_template_repository.py
+  backend/rag_solution/schemas/prompt_template_schema.py
+
+=== Py Deepmodule ===
+Files (2):
+  backend/rag_solution/router/auth_router.py
+  backend/rag_solution/router/user_router.py
+
+=== Tests Test User Router.Py Test Collectio ===
+Files (2):
+  backend/tests/router/test_collection_router.py
+  backend/tests/router/test_user_router.py
+
+=== Tests Services Deepmodule ===
+Files (2):
+  backend/tests/fixtures/
+  backend/tests/services/
+
+=== Models Services Py Deepmodule ===
+Files (4):
+  backend/rag_solution/models/pipeline.py
+  backend/rag_solution/repository/pipeline_repository.py
+  backend/rag_solution/schemas/pipeline_schema.py
+  backend/rag_solution/services/pipeline_service.py
+
+=== Tests Test Watsonx Integration.Py Test C ===
+Files (3):
+  backend/tests/integration/test_configuration_errors.py
+  backend/tests/integration/test_configuration_flow.py
+  backend/tests/integration/test_watsonx_integration.py
+
+=== Test Fixer.Py Test Models.Py Py ===
+Files (2):
+  experiments/test_models.py
+  test_fixer.py
+
+=== Test Issue Generator.Py Test And Issue.Y ===
+Files (4):
+  .github/scripts/
+  .github/workflows/test-and-issue.yml
+  pr_generator.py
+  test_issue_generator.py
+
+=== Models Services Py Deepmodule ===
+Files (5):
+  backend/rag_solution/models/llm_model.py
+  backend/rag_solution/schemas/llm_model_schema.py
+  backend/rag_solution/services/llm_model_service.py
+  backend/rag_solution/services/system_initialization_service.py
+  backend/rag_solution/services/user_provider_service.py
+
+=== Py Deepmodule ===
+Files (2):
+  backend/rag_solution/repository/llm_model_repository.py
+  backend/rag_solution/repository/user_provider_repository.py
+
+=== Tests Test Search Collection.Py Test Use ===
+Files (6):
+  backend/tests/api/__init__.py
+  backend/tests/api/base_test.py
+  backend/tests/api/test_llm_config.py
+  backend/tests/api/test_llm_provider.py
+  backend/tests/api/test_search_collection.py
+  ...and 1 more
+
+=== Test Generation.Py Test Evaluation.Py Te ===
+Files (5):
+  backend/tests/integration/__init__.py
+  backend/tests/integration/test_data_ingestion.py
+  backend/tests/integration/test_evaluation.py
+  backend/tests/integration/test_generation.py
+  backend/tests/integration/test_ingestion.py
+
+=== Test Chunking.Py Tests Test Retrieval.Py ===
+Files (3):
+  backend/tests/integration/test_chunking.py
+  backend/tests/integration/test_evaluator.py
+  backend/tests/integration/test_retrieval.py
+
+=== Tests Test Vectordbs.Py Test Document Pr ===
+Files (2):
+  backend/tests/integration/test_document_processors.py
+  backend/tests/integration/test_vectordbs.py
+
+=== Py ===
+Files (2):
+  pr_gen_2.py
+  pr_gen_3.py
