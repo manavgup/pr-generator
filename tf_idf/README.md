@@ -18,7 +18,6 @@ It analyzes:
 ---
 ## High level flowchart
 
-```
 flowchart TD
     A[Start Script] --> B[Parse Arguments<br>Get Repo Path]
     B --> C[Validate Git Repo]
@@ -40,7 +39,7 @@ flowchart TD
     M & P --> Q[Generate Labels for Final Clusters]
     Q --> R[Print Results with Labels & File Lists]
     R --> S[End Script]
-```
+
 
 ## 🚀 How to Run
 
