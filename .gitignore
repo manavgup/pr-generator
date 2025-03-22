@@ -105,6 +105,7 @@ coverage.xml
 
 *.csv
 *.png
+!embeddings/examples/*.png
 *.json
 
 # Old Source code that is being refactored
