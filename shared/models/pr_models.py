@@ -158,21 +158,28 @@ class PRSuggestion(BaseModel):
     validation_result: Optional[Dict[str, Any]] = Field(None, description="Validation results")
 
 # Tool schema models for CrewAI tool schemas
-class GitAnalysisInput(BaseModel):
+class GitAnalysisToolInput(BaseModel):
     """Input for git analysis tool."""
     model_config = ConfigDict(extra='forbid')
     
     repo_path: Optional[str] = Field(None, description="Path to the git repository")
     query: Optional[str] = Field(None, description="Optional query to filter changes")
 
-class GroupingInput(BaseModel):
+class CodeGroupingToolInput(BaseModel):
     """Input for grouping tool."""
     model_config = ConfigDict(extra='forbid')
     
     analysis_result: Dict[str, Any] = Field(..., description="Analysis result from git analysis tool")
 
-class ContentGenerationInput(BaseModel):
-    """Input for content generation tool."""
-    model_config = ConfigDict(extra='forbid')
-    
-    pr_groups: List[Dict[str, Any]] = Field(..., description="PR groups from grouping tool")
+class DirectorySummary(BaseModel):
+    """Summary of files in a directory."""
+    name: str = Field(..., description="Directory path")
+    file_count: int = Field(..., description="Number of files in this directory")
+    files: List[str] = Field(..., description="List of file paths in this directory")
+
+class GitAnalysisOutput(BaseModel):
+    """Output from GitAnalysisTool."""
+    changes: List[FileChange] = Field(..., description="List of file changes")
+    total_files_changed: int = Field(..., description="Total number of files changed")
+    repo_path: str = Field(..., description="Path to the git repository")
+    directory_summaries: List[DirectorySummary] = Field(..., description="Summaries of changes by directory")

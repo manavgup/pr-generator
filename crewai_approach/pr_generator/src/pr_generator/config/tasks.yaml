@@ -1,0 +1,75 @@
+analyze_code_task:
+  description: >
+    Analyze the Git changes in the repository at {repo_path}.
+    Identify patterns, relationships, and technical implications of the changes.
+    Focus on understanding the purpose behind each change, how files relate to each other,
+    and any potential impacts on the system.
+  expected_output: >
+    A JSON object with detailed analysis of all changes, including:
+    1. Functionality changes and their purpose
+    2. File relationships and dependencies
+    3. Technical implications of the changes
+    4. Any potential issues or considerations
+  agent: code_analyzer
+
+strategy_task:
+  description: >
+    Based on the analysis results, create logical groups for pull requests.
+    There are multiple files changed in the repository (potentially 100+).
+    
+    Follow this systematic approach to creating PR groups:
+    
+    1. First, use the "summarize_changes" tool to get a high-level overview of all changes.
+    2. Identify key directories with significant changes.
+    3. For important directories, use the "get_directory_details" tool to see specific file changes.
+    4. Form logical groups based on:
+       - Files that implement the same feature or fix the same issue
+       - Files with similar purposes or in the same module
+       - Technical dependencies between files
+    5. Balance PR sizes - avoid having one massive PR and many tiny ones.
+    6. Once you've decided on your groups, use the "create_pr_groups" tool to create them.
+    
+    Remember, each PR should have a clear, focused purpose that can be described in a title.
+  expected_output: >
+    A structure containing PR groups, where each group includes:
+    - title: A clear descriptive title
+    - files: List of files in this PR
+    - rationale: Why these files are grouped together
+    - suggested_branch: A kebab-case branch name (e.g., "fix-auth-handling")
+  agent: pr_strategist_agent
+
+content_task:
+  description: >
+    For each PR group, create detailed titles and descriptions that:
+    1. Clearly explain the purpose of the changes
+    2. Highlight key technical details and implementation choices
+    3. Mention any dependencies or related PRs
+    4. Include any necessary context for reviewers
+  expected_output: >
+    A JSON object with PR suggestions, including for each PR:
+    1. A clear, descriptive title
+    2. A detailed PR description
+    3. A list of files included
+    4. A suggested branch name
+  agent: pr_content_generator
+  output_file: pr_suggestions.json
+
+validation_task:
+  description: >
+    Validate the PR suggestions to ensure they cover ALL changes from the Code Analyzer output and follow best practices.
+    It's critical to check that every single file identified by the Code Analyzer is included in at least one PR.
+    Check if all changed files are included in PRs, evaluate the balance of PR groups,
+    and suggest improvements. Consider:
+    1. Missing files that should be included in PRs - THIS IS THE HIGHEST PRIORITY
+    2. Balance of PR groups (no groups too large or too small)
+    3. Logical grouping of related files
+    4. The overall efficiency of the suggested PRs for reviewers
+    
+    You MUST verify that the file count from the analysis matches the total files included in PRs.
+  expected_output: >
+    A JSON object with validated and improved PR suggestions, including:
+    1. Assessment of the current PR suggestions
+    2. Any missing files or issues identified
+    3. Recommendations for improvements
+    4. Final updated PR suggestions that address identified issues
+  agent: pr_validator

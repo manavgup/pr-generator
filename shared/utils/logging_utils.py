@@ -1,117 +1,120 @@
 """
-Logging utilities for PR generation.
+Enhanced logging configuration for PR generation.
 """
-import functools
-import logging
 import os
+import logging
 import time
-from typing import Callable, Any
+from datetime import datetime
+from typing import Optional, Dict, Any
 
-logger = logging.getLogger(__name__)
+# Add file permission constants for Windows compatibility
+LOG_DIR = "logs"
 
-def configure_logging(log_file: str = None, verbose: bool = False):
+def configure_logging(log_file: Optional[str] = None, verbose: bool = False) -> logging.Logger:
     """
-    Configure logging for the application.
+    Configure logging with simplified file handling.
     
     Args:
-        log_file: Path to log file (if None, only console logging is enabled)
+        log_file: Path to log file (if None, a timestamped file will be used)
         verbose: Whether to enable verbose logging
+        
+    Returns:
+        The root logger
     """
+    # Create logs directory if it doesn't exist
+    os.makedirs(LOG_DIR, exist_ok=True)
+    
+    # Set default log file if not provided
+    if not log_file:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(LOG_DIR, f"pr_generator_{timestamp}.log")
+    
     # Set the root logger level
     root_logger = logging.getLogger()
+    
+    # Remove existing handlers to prevent duplicate logs
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
-    root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
     
-    # Create a formatter that includes the logger name
-    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+    # Set log level based on verbose flag
+    log_level = logging.DEBUG if verbose else logging.INFO
+    root_logger.setLevel(log_level)
+    
+    # Create a formatter that includes the logger name and line number
+    formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s:%(lineno)d - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
     
     # Configure console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
+    console_handler.setLevel(log_level)
     root_logger.addHandler(console_handler)
     
-    # Configure file handler if a log file is specified
-    if log_file:
-        # Ensure the directory exists
-        os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
-        
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
+    # Configure file handler - simpler approach
+    file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.DEBUG)
+    root_logger.addHandler(file_handler)
     
-    # Reduce noise from third-party libraries when in verbose mode
-    if verbose:
-        logging.getLogger("openai").setLevel(logging.INFO)
-        logging.getLogger("httpx").setLevel(logging.INFO)
-        logging.getLogger("httpcore").setLevel(logging.INFO)
+    # Log some initial messages
+    root_logger.info(f"Logging configured: verbose={verbose}, log_file={log_file}")
     
-    logger.info(f"Logging configured with verbose={verbose}, log_file={log_file}")
+    # Reduce noise from third-party libraries
+    logging.getLogger("openai").setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.INFO)
+    logging.getLogger("httpcore").setLevel(logging.INFO)
+    logging.getLogger("litellm").setLevel(logging.INFO)
+    
+    # Set specific loggers for our own modules to INFO
+    logging.getLogger("pr_generator").setLevel(logging.INFO)
+    logging.getLogger("shared").setLevel(logging.INFO)
+    
+    return root_logger
 
-def log_operation(operation_name: str) -> Callable:
+def get_logger(name: str) -> logging.Logger:
     """
-    Decorator for logging operations with timing information.
+    Get a logger with the specified name.
+    Ensures consistent logging configuration throughout the application.
     
     Args:
-        operation_name: Name of the operation to log
+        name: Name of the logger
         
     Returns:
-        Decorated function
+        Logger instance
     """
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
-            logger.info(f"Started: {operation_name}")
-            start_time = time.time()
-            
-            try:
-                result = func(*args, **kwargs)
-                elapsed = time.time() - start_time
-                logger.info(f"Completed: {operation_name} in {elapsed:.2f}s")
-                return result
-            except Exception as e:
-                elapsed = time.time() - start_time
-                logger.error(f"Failed: {operation_name} after {elapsed:.2f}s - {str(e)}")
-                raise
-                
-        return wrapper
-    return decorator
+    return logging.getLogger(name)
 
-def log_llm_prompt(prompt_name: str, prompt_text: str, verbose: bool = True) -> None:
+class LoggingContext:
     """
-    Log an LLM prompt if verbose mode is enabled.
+    Context manager for temporarily changing logging settings.
     
-    Args:
-        prompt_name: Name of the prompt
-        prompt_text: Text of the prompt
-        verbose: Whether to actually log the prompt
+    Example:
+        with LoggingContext(level=logging.DEBUG):
+            # Code executed with DEBUG logging
+        # Outside the context, original logging level is restored
     """
-    if verbose:
-        # Always log a basic message
-        logger.info(f"Sending prompt: {prompt_name}")
-        
-        # Log the full prompt at debug level
-        logger.info(f"LLM Prompt [{prompt_name}]:\n{'-'*40}\n{prompt_text}\n{'-'*40}")
-    else:
-        # Just log that a prompt is being sent without details
-        logger.info(f"Sending prompt: {prompt_name}")
-
-def log_llm_response(response_name: str, response_text: str, verbose: bool = False) -> None:
-    """
-    Log an LLM response if verbose mode is enabled.
+    def __init__(self, logger=None, level=None, handler=None, close=True):
+        self.logger = logger or logging.getLogger()
+        self.level = level
+        self.handler = handler
+        self.close = close
+        self.old_level = self.logger.level
+        self.old_handlers = self.logger.handlers.copy()
     
-    Args:
-        response_name: Name of the response
-        response_text: Text of the response
-        verbose: Whether to actually log the response
-    """
-    if verbose:
-        # Always log a basic message
-        logger.info(f"Received response: {response_name}")
-        
-        # Log the full response at debug level
-        logger.debug(f"LLM Response [{response_name}]:\n{'-'*40}\n{response_text}\n{'-'*40}")
-    else:
-        # Just log that a response was received without details
-        logger.info(f"Received response: {response_name}")
+    def __enter__(self):
+        if self.level is not None:
+            self.logger.setLevel(self.level)
+        if self.handler:
+            self.logger.addHandler(self.handler)
+        return self.logger
+    
+    def __exit__(self, et, ev, tb):
+        if self.level is not None:
+            self.logger.setLevel(self.old_level)
+        if self.handler:
+            self.logger.removeHandler(self.handler)
+            if self.close:
+                self.handler.close()
+        return False  # Don't suppress exceptions
