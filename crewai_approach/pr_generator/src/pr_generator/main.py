@@ -157,7 +157,7 @@ def display_validation_results(validation_result: Dict[str, Any]) -> None:
 def main():
     """Main function for the PR generator script using CrewAI."""
     global logger
-    
+
     parser = argparse.ArgumentParser(description='Generate PR suggestions for a git repository using CrewAI')
     parser.add_argument('repo_path', help='Path to the git repository')
     parser.add_argument('--provider', default='ollama', choices=['ollama', 'openai'], 
@@ -201,7 +201,7 @@ def main():
     # If check-files is enabled, check if we can read files
     if args.check_files:
         try:
-            from shared.git_operations import GitOperations
+            from shared.tools.git_operations import GitOperations
             git_ops = GitOperations(repo_path)
             changes = git_ops.get_changed_files()
             logger.info(f"Successfully read {len(changes)} changed files")

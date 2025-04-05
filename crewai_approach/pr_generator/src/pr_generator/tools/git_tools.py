@@ -16,7 +16,7 @@ from shared.models.pr_models import (
     GitAnalysisOutput,
     LineChanges
 )
-from shared.git_operations import (
+from shared.tools.git_operations import (
     get_changed_files, 
     get_changed_file_list,
     get_changed_files_stats,

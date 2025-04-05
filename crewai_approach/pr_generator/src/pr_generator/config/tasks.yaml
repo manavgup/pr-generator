@@ -1,75 +1,52 @@
-analyze_code_task:
-  description: >
-    Analyze the Git changes in the repository at {repo_path}.
-    Identify patterns, relationships, and technical implications of the changes.
-    Focus on understanding the purpose behind each change, how files relate to each other,
-    and any potential impacts on the system.
-  expected_output: >
-    A JSON object with detailed analysis of all changes, including:
-    1. Functionality changes and their purpose
-    2. File relationships and dependencies
-    3. Technical implications of the changes
-    4. Any potential issues or considerations
-  agent: code_analyzer
+# PR Recommendation System Task Definitions
+tasks:
+  - id: repository_assessment
+    name: Repository Assessment
+    description: "Evaluate repository structure and complexity to choose appropriate PR grouping strategies"
+    agent: pr_strategist
+    expected_output: "A comprehensive assessment of the repository's structure, complexity, and an identification of the optimal grouping strategies"
+    output_pydantic: "RepoAssessmentResult"
+    context: |
+      You need to carefully analyze the repository structure and changes to determine the best approach for creating pull request groups.
+      Consider:
+      1. The total number of files changed
+      2. The distribution of changes across directories
+      3. File types involved in the changes
+      4. The size and complexity of individual changes
+      5. Potential logical groupings based on directory structure or file naming patterns
+      
+      Based on your analysis, recommend specific grouping strategies that would be most effective for this repository.
 
-strategy_task:
-  description: >
-    Based on the analysis results, create logical groups for pull requests.
-    There are multiple files changed in the repository (potentially 100+).
-    
-    Follow this systematic approach to creating PR groups:
-    
-    1. First, use the "summarize_changes" tool to get a high-level overview of all changes.
-    2. Identify key directories with significant changes.
-    3. For important directories, use the "get_directory_details" tool to see specific file changes.
-    4. Form logical groups based on:
-       - Files that implement the same feature or fix the same issue
-       - Files with similar purposes or in the same module
-       - Technical dependencies between files
-    5. Balance PR sizes - avoid having one massive PR and many tiny ones.
-    6. Once you've decided on your groups, use the "create_pr_groups" tool to create them.
-    
-    Remember, each PR should have a clear, focused purpose that can be described in a title.
-  expected_output: >
-    A structure containing PR groups, where each group includes:
-    - title: A clear descriptive title
-    - files: List of files in this PR
-    - rationale: Why these files are grouped together
-    - suggested_branch: A kebab-case branch name (e.g., "fix-auth-handling")
-  agent: pr_strategist_agent
+  - id: pr_strategy_development
+    name: PR Strategy Development
+    description: "Create logical groups of files for PRs using the appropriate strategies identified in the repository assessment"
+    agent: pr_strategist
+    expected_output: "A well-structured set of PR groups organized according to the chosen strategies"
+    output_pydantic: "PRGroupingStrategy"
+    context: |
+      Using the repository assessment and the recommended strategies, create logical groups of files for PRs.
+      For each group:
+      1. Ensure there's a clear organizing principle (feature, subsystem, dependency, etc.)
+      2. Keep the groups balanced in size when possible
+      3. Prioritize keeping related changes together
+      4. Consider technical dependencies between files
+      5. Avoid mixing unrelated changes in the same group
+      
+      Provide a rationale for each grouping to explain your reasoning.
 
-content_task:
-  description: >
-    For each PR group, create detailed titles and descriptions that:
-    1. Clearly explain the purpose of the changes
-    2. Highlight key technical details and implementation choices
-    3. Mention any dependencies or related PRs
-    4. Include any necessary context for reviewers
-  expected_output: >
-    A JSON object with PR suggestions, including for each PR:
-    1. A clear, descriptive title
-    2. A detailed PR description
-    3. A list of files included
-    4. A suggested branch name
-  agent: pr_content_generator
-  output_file: pr_suggestions.json
+  - id: pr_validation
+    name: PR Validation
+    description: "Verify PR groups for completeness, balance, and coherence to ensure quality"
+    agent: pr_validator
+    expected_output: "A validated and potentially refined set of PR groups, with any issues identified and addressed"
+    output_pydantic: "PRValidationResult"
+    context: |
+      Review the PR groups created by the PR Strategist and validate them against best practices.
+      Check for:
+      1. Completeness - all changed files are included in some group
+      2. Balance - PR groups are reasonably sized for review
+      3. Coherence - each PR has a clear purpose and contains related changes
+      4. Clarity - PR titles and descriptions are clear and informative
+      5. Dependencies - PRs with dependencies are properly identified
 
-validation_task:
-  description: >
-    Validate the PR suggestions to ensure they cover ALL changes from the Code Analyzer output and follow best practices.
-    It's critical to check that every single file identified by the Code Analyzer is included in at least one PR.
-    Check if all changed files are included in PRs, evaluate the balance of PR groups,
-    and suggest improvements. Consider:
-    1. Missing files that should be included in PRs - THIS IS THE HIGHEST PRIORITY
-    2. Balance of PR groups (no groups too large or too small)
-    3. Logical grouping of related files
-    4. The overall efficiency of the suggested PRs for reviewers
-    
-    You MUST verify that the file count from the analysis matches the total files included in PRs.
-  expected_output: >
-    A JSON object with validated and improved PR suggestions, including:
-    1. Assessment of the current PR suggestions
-    2. Any missing files or issues identified
-    3. Recommendations for improvements
-    4. Final updated PR suggestions that address identified issues
-  agent: pr_validator
+      Refine the groups if necessary to address any issues you identify.
