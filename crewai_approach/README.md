@@ -34,6 +34,12 @@ The system uses a CrewAI-based architecture following the recommended decorator 
     *   **Shared Models**: (`shared/models/`) Define core concepts like `RepositoryAnalysis`, `FileChange`, `DirectorySummary`. Reusable across frameworks.
     *   **Agent Models**: (`models/agent_models.py`) Define specific inputs/outputs for the CrewAI workflow, like `GroupingStrategyDecision`, `PRGroupingStrategy`, `PRValidationResult`.
 
+5.  **Data Format**: Tools in this system use a standard pattern to handle data:
+    *   **Input**: Tools accept dictionary inputs (rather than direct Pydantic models) for flexibility
+    *   **Output**: Tools return JSON strings (rather than Pydantic objects) for reliable serialization
+    *   **Validation**: Tools perform explicit validation of input data and return structured error responses
+    *   This approach ensures compatibility with CrewAI's data passing mechanisms and provides robust error handling.
+
 ## Usage
 
 ### Command Line
@@ -84,6 +90,14 @@ if final_result:
 ```
 (Replace your_module_name with the actual import path)
 
+## Observability and Debugging
+The system includes several features to help with observability and debugging:
+
+- Task Outputs: Each task's output is saved as a JSON file in the output directory, allowing you to inspect intermediate results.
+- Logging: Comprehensive logging at different verbosity levels helps track the execution flow and identify issues.
+- AgentOps Integration: The system can be monitored using AgentOps, which provides a waterfall view of execution spans, clearly showing agent reasoning and tool usage.
+- Error Handling: Tools include robust error handling and return structured error responses as JSON, making it easier to diagnose issues.
+
 ## Configuration
 
 The system uses YAML files for agent and task configurations, managed by CrewBase:
@@ -94,6 +108,7 @@ The system uses YAML files for agent and task configurations, managed by CrewBas
 
 ## Agent Configuration (agents.yaml)
 ```
+# Agent definitions used by CrewBase
 # Agent definitions used by CrewBase
 pr_strategist:
   role: "Expert in organizing code changes..."
@@ -178,6 +193,45 @@ To extend or modify the system:
 
     Add/Modify Models: Update Pydantic models in models/ or shared/models/. Ensure dependent tools and tasks are updated.
 
-Configuration Auto-Creation
+### Configuration Auto-Creation
 
 If config/agents.yaml or config/tasks.yaml are missing, the system will create default versions upon running main.py, reflecting the 7-task structure defined in crew.py.
+
+## Tool Design Principles
+
+When creating or modifying tools for this system, follow these design principles:
+
+1. **Input Simplicity**: Tools accept dictionaries rather than Pydantic models directly
+
+```python
+def _run(self, repo_path: str, repository_analysis: Dict[str, Any], **kwargs) -> str:
+```
+
+2. **Output Consistency**: Tools return JSON strings (serialized dictionaries) rather than objects
+```python
+return json.dumps(result, indent=2)
+```
+
+3. **Explicit Validation**: Tools validate inputs and handle errors gracefully
+
+```python
+try:
+    # Extract and validate data
+except ValidationError as e:
+    error_msg = f"Validation error: {str(e)}"
+    logger.error(error_msg)
+    return json.dumps({"error": error_msg})
+```
+
+4. **Robust Error Handling**: Tools return well-structured error responses that won't break the pipeline
+```python
+except Exception as e:
+    error_msg = f"Error analyzing patterns: {str(e)}"
+    logger.error(error_msg)
+    return json.dumps({
+        "error": error_msg,
+        "naming_patterns": [],
+        # ... minimal valid structure ...
+    })
+```
+These principles ensure tools work reliably within the CrewAI framework, where serialization and data passing between components are critical concerns.

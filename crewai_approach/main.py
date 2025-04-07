@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime
 import shutil
 from pathlib import Path # Use pathlib
+import agentops
 
 # Assume configure_logging expects a 'verbose' boolean argument
 from shared.utils.logging_utils import configure_logging, get_logger
@@ -22,6 +23,7 @@ def main():
     parser.add_argument('--output-dir', type=str, default='outputs', help='Directory to save output files')
     parser.add_argument('--verbose', '-v', action='count', default=0, help='Increase verbosity level (e.g., -v, -vv)')
     args = parser.parse_args()
+    agentops.init()
 
     # --- FIX IS HERE ---
     # Determine if verbose logging is enabled based on the count
@@ -64,7 +66,7 @@ def main():
             logger.info(f"Setting max_files={args.max_files} in inputs")
 
         # Instantiate the crew with parsed arguments
-        pr_crew_instance = PRRecommendationCrew(
+        crew_instance = PRRecommendationCrew(
             repo_path=str(repo_path),
             max_files=args.max_files,
             verbose=crew_verbose_level, # Pass the 0, 1, 2 level to crew
@@ -74,13 +76,31 @@ def main():
         logger.info("Starting PR recommendation workflow...")
         logger.info(f"Using inputs: {inputs}")
         # Inputs for the kickoff are now handled by @before_kickoff
-        result = pr_crew_instance.crew().kickoff(inputs=inputs)
+        result = crew_instance.crew().kickoff(inputs=inputs)
 
         logger.info("----------------------------------------")
         logger.info("✅ PR Recommendation Workflow Completed")
         logger.info("----------------------------------------")
         logger.info(f"Final refined recommendations saved in: {output_dir}")
         # Log the final result structure (optional)
+
+        if hasattr(crew_instance, 'token_usage') and crew_instance.token_usage:
+            logger.info("--- Usage Metrics ---")
+            # The structure might vary slightly based on CrewAI version, inspect it
+            total_tokens = crew_instance.usage_metrics.get('total_tokens', 0)
+            prompt_tokens = crew_instance.usage_metrics.get('prompt_tokens', 0)
+            completion_tokens = crew_instance.usage_metrics.get('completion_tokens', 0)
+            successful_requests = crew_instance.usage_metrics.get('successful_requests', 0)
+
+            logger.info(f"Total Tokens Used: {total_tokens}")
+            logger.info(f"Prompt Tokens: {prompt_tokens}")
+            logger.info(f"Completion Tokens: {completion_tokens}")
+            logger.info(f"Successful LLM Requests: {successful_requests}")
+            # You might find more details like cost if configured
+            # print(crew_instance.usage_metrics) # Print the whole dict for inspection
+        else:
+             logger.warning("Usage metrics not available on the crew object.")
+
         if result:
              logger.debug(f"Final Crew Result (Output of last task):\n{result}")
         return 0
