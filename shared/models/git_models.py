@@ -28,18 +28,15 @@ class FileChange(BaseModel):
         arbitrary_types_allowed=True # Allow pathlib.Path
     )
 
-    # Core Git Status Info (Adopted from GitFileChange suggestion)
-    path: Path = Field(..., description="The current path of the file relative to the repo root.")
+    # Change these to string paths for JSON serialization
+    path: str = Field(..., description="The current path of the file relative to the repo root.")
     staged_status: FileStatusType = Field(..., description="Status of the file in the staging area (index).")
     unstaged_status: FileStatusType = Field(..., description="Status of the file in the working directory.")
-    original_path: Optional[Path] = Field(
+    original_path: Optional[str] = Field(
         default=None,
         description="The original path if the file was renamed or copied (staged status R/C)."
     )
     file_type: FileType = Field(default=FileType.UNKNOWN, description="Type of file (text or binary)")
-    # Change Statistics (Optional - populated if requested/possible)
-    # NOTE: Populating this accurately requires running `git diff --numstat` separately
-    # for staged and unstaged changes. GitOperations will handle this.
     changes: Optional[LineChanges] = Field(
         default=None, # Make optional, may not always be calculated
         description="Aggregated line change statistics (staged + unstaged)."
@@ -47,30 +44,28 @@ class FileChange(BaseModel):
     content_hash: Optional[str] = Field(default=None, description="Hash of the file content")
     token_estimate: Optional[int] = Field(default=None, description="Estimated tokens if diff is fetched")
 
-    # Deprecated/Replaced Fields:
-    # - status: Replaced by staged_status and unstaged_status for clarity.
-    # - diff: Diff content is generally fetched on demand by GitOperations.get_diff(),
-    #         not stored directly in this model by default to keep it lightweight.
-
-    # Computed Fields (Using pathlib)
+    # Computed Fields (Using pathlib for computation but returning strings)
     @computed_field # type: ignore[misc]
     @property
-    def directory(self) -> Path:
+    def directory(self) -> str:
         """The directory containing the file, relative to the repo root."""
-        # Return Path('.') for root directory files
-        return self.path.parent if self.path.parent != Path('.') else Path('(root)')
+        # Convert to Path for computation, then back to string
+        path_obj = Path(self.path)
+        parent = path_obj.parent
+        return str(parent) if parent != Path('.') else "(root)"
 
     @computed_field # type: ignore[misc]
     @property
     def extension(self) -> Optional[str]:
         """The file extension, including the leading dot (e.g., '.py')."""
-        return self.path.suffix.lower() if self.path.suffix else None
+        path_obj = Path(self.path)
+        return path_obj.suffix.lower() if path_obj.suffix else None
 
     @computed_field # type: ignore[misc]
     @property
     def filename(self) -> str:
         """The name of the file including the extension."""
-        return self.path.name
+        return Path(self.path).name
 
     # Convenience Properties based on Status
     @property

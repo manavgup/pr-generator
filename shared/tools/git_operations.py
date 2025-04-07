@@ -444,7 +444,7 @@ class GitOperations:
                     
                     # Create FileChange object without diff or diff_summary
                     file_change = FileChange(
-                        path=Path(file_path),
+                        path=str(file_path),
                         staged_status=FileStatusType.MODIFIED,
                         unstaged_status=FileStatusType.NONE,
                         changes=LineChanges(
@@ -464,7 +464,7 @@ class GitOperations:
                     logger.error(f"Error processing diff for {file_path}: {e}")
                     # Add a minimal FileChange object to ensure the file is included
                     batch_results.append(FileChange(
-                        path=Path(file_path),
+                        path=str(file_path),
                         staged_status=FileStatusType.UNTRACKED,
                         unstaged_status=FileStatusType.UNTRACKED,
                         changes=LineChanges(
@@ -611,7 +611,7 @@ class GitOperations:
         
         for change in file_changes:
             # Use the computed directory property from Path object
-            directory_str = str(change.directory)
+            directory_str = change.directory
             
             if directory_str not in directories:
                 directories[directory_str] = DirectorySummary(
@@ -626,7 +626,7 @@ class GitOperations:
             dir_summary = directories[directory_str]
             dir_summary.file_count += 1
             # Use str(change.path) to get file path as string
-            dir_summary.files.append(str(change.path))
+            dir_summary.files.append(change.path)
             dir_summary.total_changes += change.total_changes
             
             # Update extensions count - use computed property
@@ -638,7 +638,7 @@ class GitOperations:
         
         # Create repository analysis
         analysis = RepositoryAnalysis(
-            repo_path=self.repo_path,
+            repo_path=str(self.repo_path),
             file_changes=file_changes,
             directory_summaries=list(directories.values()),
             total_files_changed=len(file_changes),

@@ -9,29 +9,38 @@ from .git_models import FileChange
 from .directory_models import DirectorySummary
 
 class RepositoryAnalysis(BaseModel):
-    """Complete analysis of a git repository."""
-    model_config = ConfigDict(frozen=False)
-    
+    """Model for repository analysis results"""
+    model_config = ConfigDict(
+        extra='forbid'
+    )
+
+    # Use string path instead of Path
     repo_path: str = Field(..., description="Path to the git repository")
     file_changes: List[FileChange] = Field(default_factory=list, description="List of file changes")
-    directory_summaries: List[DirectorySummary] = Field(default_factory=list, description="Summaries by directory")
-    total_files_changed: int = Field(default=0, description="Total number of files changed")
-    total_lines_changed: int = Field(default=0, description="Total number of lines changed")
-    timestamp: float = Field(default_factory=time.time, description="Timestamp of the analysis")
-    
+    directory_summaries: List[DirectorySummary] = Field(default_factory=list, description="Summary of changes by directory")
+    total_files_changed: int = Field(default=0, description="Total number of files with changes")
+    total_lines_changed: int = Field(default=0, description="Total number of lines changed (added + deleted)")
+    timestamp: float = Field(default_factory=lambda: time.time(), description="Timestamp of analysis")
+
+    # Computed properties
     @computed_field
+    @property
     def extensions_summary(self) -> Dict[str, int]:
-        """Summary of file extensions."""
+        """Summary of file extensions and their counts"""
         extensions: Dict[str, int] = {}
-        for change in self.file_changes:
-            ext = change.extension or "none"
-            extensions[ext] = extensions.get(ext, 0) + 1
+        for file_change in self.file_changes:
+            ext = file_change.extension or "none"
+            if ext not in extensions:
+                extensions[ext] = 0
+            extensions[ext] += 1
         return extensions
     
     @computed_field
-    def directories(self) -> Set[str]:
-        """Set of all directories with changes."""
-        return {change.directory for change in self.file_changes}
+    def directories(self) -> List[str]:
+        """List of unique directories with changes (as strings)."""
+        # Return a sorted list instead of a set
+        unique_dirs = {str(change.directory) for change in self.file_changes}
+        return sorted(list(unique_dirs))
     
     def get_files_by_directory(self, directory: str) -> List[FileChange]:
         """Get all files in a specific directory."""
