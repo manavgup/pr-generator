@@ -1,4 +1,5 @@
 # Contains models directly related to Git operations
+import uuid
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -24,9 +25,10 @@ class FileChange(BaseModel):
     including metadata and optional summary statistics.
     """
     model_config = ConfigDict(
-        extra='forbid',
+        extra='ignore',
         arbitrary_types_allowed=True # Allow pathlib.Path
     )
+    file_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique identifier for this file change record.")
 
     # Change these to string paths for JSON serialization
     path: str = Field(..., description="The current path of the file relative to the repo root.")

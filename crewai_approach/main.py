@@ -3,25 +3,25 @@
 import os
 import sys
 import argparse
-from datetime import datetime
-import shutil
 from pathlib import Path # Use pathlib
 import agentops
 
 # Assume configure_logging expects a 'verbose' boolean argument
 from shared.utils.logging_utils import configure_logging, get_logger
-from .crew import PRRecommendationCrew
+from .crew import HierarchicalPRCrew
 
 logger = get_logger(__name__)
 
 
 def main():
     """Main function for the PR recommendation system."""
-    parser = argparse.ArgumentParser(description='Generate PR Grouping Recommendations.')
+    parser = argparse.ArgumentParser(description='Run Hiearchical PR Grouping Recommendations Crew.')
     parser.add_argument('repo_path', type=str, help='Path to the local git repository')
-    parser.add_argument('--max-files', type=int, default=None, help='Maximum number of changed files to analyze fully')
+    parser.add_argument('--max-files', type=int, default=50, help='Maximum number of changed files to analyze fully')
+    parser.add_argument("--max-batch-size", type=int, default=10, help="Target maximum files per processing batch.")
     parser.add_argument('--output-dir', type=str, default='outputs', help='Directory to save output files')
     parser.add_argument('--verbose', '-v', action='count', default=0, help='Increase verbosity level (e.g., -v, -vv)')
+    parser.add_argument("--manager-llm", default="gpt-4o", help="LLM model to use for the manager agent/process.")
     args = parser.parse_args()
     agentops.init()
 
@@ -66,23 +66,27 @@ def main():
             logger.info(f"Setting max_files={args.max_files} in inputs")
 
         # Instantiate the crew with parsed arguments
-        crew_instance = PRRecommendationCrew(
+        crew_instance = HierarchicalPRCrew(
             repo_path=str(repo_path),
             max_files=args.max_files,
+            max_batch_size=args.max_batch_size,
             verbose=crew_verbose_level, # Pass the 0, 1, 2 level to crew
-            output_dir=str(output_dir)
+            output_dir=str(output_dir),
+            manager_llm_name=args.manager_llm # Pass manager LLM name
         )
 
-        logger.info("Starting PR recommendation workflow...")
+        logger.info("Starting Hierarchical PR Recommendation Crew (Hierarchical Process)...")
         logger.info(f"Using inputs: {inputs}")
+        logger.info(f"Manager LLM: {args.manager_llm}")
         # Inputs for the kickoff are now handled by @before_kickoff
         result = crew_instance.crew().kickoff(inputs=inputs)
 
         logger.info("----------------------------------------")
         logger.info("✅ PR Recommendation Workflow Completed")
         logger.info("----------------------------------------")
-        logger.info(f"Final refined recommendations saved in: {output_dir}")
-        # Log the final result structure (optional)
+        final_output_filename = f"{Path(args.output_dir).name}_final_recommendations.json"
+        final_output_path = Path(args.output_dir) / final_output_filename
+        logger.info(f"Final recommendations expected at: {final_output_path} (saved by callback)")
 
         if hasattr(crew_instance, 'token_usage') and crew_instance.token_usage:
             logger.info("--- Usage Metrics ---")

@@ -2,36 +2,39 @@
 import json
 import os
 from pathlib import Path
-from typing import Optional, Dict, List # Added List
+from typing import Optional, Dict, List
 
 from crewai import Agent, Crew, Task, Process
 from crewai.project import CrewBase, agent, task, crew, before_kickoff
 from shared.utils.logging_utils import get_logger
 # --- Model Imports ---
-# (Keep previous imports for models)
 from .models.agent_models import (
     RepositoryMetrics, PatternAnalysisResult, GroupingStrategyDecision,
     PRGroupingStrategy, PRValidationResult, DirectoryAnalysisResult
 )
+from models.batching_models import BatchSplitterOutput
 from shared.models.analysis_models import RepositoryAnalysis
 
 # --- Tool Imports ---
-# (Keep previous imports for tools)
-from .tools.repo_analyzer import RepoAnalyzerTool
-from .tools.repo_metrics import RepositoryMetricsCalculator
-from .tools.directory_analyzer import DirectoryAnalyzer
-from .tools.pattern_analyzer import PatternAnalyzerTool
-from .tools.grouping_strategy_selector import GroupingStrategySelector
-from .tools.file_grouper import FileGrouperTool
-from .tools.group_validator import GroupValidatorTool
-from .tools.group_refiner import GroupRefiner
+from .tools.repo_analyzer_tool import RepoAnalyzerTool
+from .tools.repo_metrics_tool import RepositoryMetricsCalculator
+from .tools.pattern_analyzer_tool import PatternAnalyzerTool
+from .tools.grouping_strategy_selector_tool import GroupingStrategySelector
+# Batching Tools
+from .tools.batch_splitter_tool import BatchSplitterTool
+from .tools.group_merging_tool import GroupMergingTool
+# Worker Tools
+from .tools.file_grouper_tool import FileGrouperTool
+from .tools.group_validator_tool import GroupValidatorTool
+from .tools.group_refiner_tool import GroupRefiner
 
 logger = get_logger(__name__)
 
 @CrewBase
-class PRRecommendationCrew:
+class HierarchicalPRCrew:
     """
-    Crew that analyzes repository changes and suggests logical PR groupings.
+    Hierarchical Crew using Process.hierarchical to analyze repository changes
+    and suggest logical PR groupings, handling large repositories via batching.
     """
     agents_config = 'config/agents.yaml'
     tasks_config = 'config/tasks.yaml'
@@ -39,8 +42,10 @@ class PRRecommendationCrew:
     def __init__(self,
                  repo_path: str,
                  max_files: Optional[int] = None,
+                 max_batch_size: int = 50,
                  verbose: bool | int = False, # Allow int for crewAI verbosity levels
-                 output_dir: str = 'outputs'):
+                 output_dir: str = 'outputs',
+                 manager_llm_name: str = "gpt-4o"):
         """
         Initialize the PR Recommendation crew.
 
@@ -50,42 +55,56 @@ class PRRecommendationCrew:
             verbose: Verbosity level (True/False or 1/2).
             output_dir: Directory to save intermediate and final outputs.
         """
-        logger.info(f"Initializing PRRecommendationCrew for repository: {repo_path}")
-        logger.info(f"Max files: {max_files}, Verbose: {verbose}, Output Dir: {output_dir}")
+        logger.info(f"Initializing HierarchicalPRCrew (Hierarchical Process) for repository: {repo_path}")
+        logger.info(f"Max files: {max_files}, Max Batch Size: {max_batch_size}, Verbose: {verbose}")
 
         self.repo_path = Path(repo_path).resolve() # Ensure absolute path
         self.max_files = max_files
+        self.max_batch_size = max_batch_size
         self.verbose = verbose
         self.output_dir = Path(output_dir).resolve()
         self.output_dir.mkdir(parents=True, exist_ok=True) # Ensure output dir exists
+        self.manager_llm_name = manager_llm_name
+
+        # Check repo path
+        if not (self.repo_path / ".git").is_dir():
+            raise ValueError(f"Not a valid Git repository: {self.repo_path}")
 
         # --- Tool Instantiation ---
         logger.info("Instantiating tools...")
-        self.repo_analyzer_tool = RepoAnalyzerTool()
-        self.repo_metrics_tool = RepositoryMetricsCalculator()
-        self.directory_analyzer_tool = DirectoryAnalyzer()
-        self.pattern_analyzer_tool = PatternAnalyzerTool()
-        self.grouping_strategy_selector_tool = GroupingStrategySelector()
-        self.file_grouper_tool = FileGrouperTool()
-        self.group_validator_tool = GroupValidatorTool()
-        self.group_refiner_tool = GroupRefiner()
+        # Ensure all these tools get the repo_path parameter:
+        self.repo_analyzer_tool = RepoAnalyzerTool(repo_path=str(self.repo_path))
+        self.repo_metrics_tool = RepositoryMetricsCalculator(repo_path=str(self.repo_path))
+        self.pattern_analyzer_tool = PatternAnalyzerTool(repo_path=str(self.repo_path))
+        self.grouping_strategy_selector_tool = GroupingStrategySelector(repo_path=str(self.repo_path))
+        self.batch_splitter_tool = BatchSplitterTool(repo_path=str(self.repo_path))
+        self.group_merging_tool = GroupMergingTool(repo_path=str(self.repo_path))
+        self.file_grouper_tool = FileGrouperTool(repo_path=str(self.repo_path))
+        self.group_validator_tool = GroupValidatorTool(repo_path=str(self.repo_path))
+        self.group_refiner_tool = GroupRefiner(repo_path=str(self.repo_path))
+
         # Create a map for easy access by name if needed elsewhere, though direct access is fine too
         self.tools_map = {
-            "repo_analyzer": self.repo_analyzer_tool,
-            "repo_metrics": self.repo_metrics_tool,
-            "directory_analyzer": self.directory_analyzer_tool,
-            "pattern_analyzer": self.pattern_analyzer_tool,
-            "grouping_strategy_selector": self.grouping_strategy_selector_tool,
-            "file_grouper": self.file_grouper_tool,
-            "group_validator": self.group_validator_tool,
-            "group_refiner": self.group_refiner_tool
+            "repo_analyzer_tool": self.repo_analyzer_tool,
+            "repo_metrics_tool": self.repo_metrics_tool,
+            "pattern_analyzer_tool": self.pattern_analyzer_tool,
+            "grouping_strategy_selector_tool": self.grouping_strategy_selector_tool,
+            "batch_splitter_tool": self.batch_splitter_tool,
+            "group_merging_tool": self.group_merging_tool,
+            "file_grouper_tool": self.file_grouper_tool,
+            "group_validator_tool": self.group_validator_tool,
+            "group_refiner_tool": self.group_refiner_tool
         }
         logger.info("Tools instantiated.")
 
-        # Simplified check - GitOperations performs deeper checks
-        if not (self.repo_path / ".git").is_dir():
-             raise ValueError(f"Provided path is not a valid Git repository: {self.repo_path}")
-
+    def __getattr__(self, name):
+        """
+        Dynamically handle requests for tool methods.
+        This is called when an attribute is not found through normal means.
+        """
+        if name in self.tools_map:
+            return lambda: self.tools_map[name]
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
     @before_kickoff
     def prepare_inputs(self, inputs: Optional[Dict] = None) -> Dict:
@@ -97,255 +116,253 @@ class PRRecommendationCrew:
         inputs.update({
             'repo_path': str(self.repo_path),
             'max_files': self.max_files,  # This will be None if not provided
-            'use_summarization': True,
-            'max_diff_size': 2000
+            'max_batch_size': self.max_batch_size,
         })
         
         logger.debug(f"Inputs prepared: {inputs}")
         return inputs
 
     def _save_output_callback(self, step_name: str):
-        """Generic callback to save task output, handling Path objects."""
+        """Creates a callback function to save task output to JSON."""
         filepath = self.output_dir / f"{step_name}.json"
+        
         def save_output(output):
+            """Save output to a JSON file and return it unchanged."""
             logger.info(f"Saving output for step '{step_name}' to {filepath}")
+            
             try:
-                # Prepare data for JSON serialization: convert Path objects to strings
-                if hasattr(output, 'model_dump'):
-                    # Use Pydantic's model_dump for robust serialization
-                    # By default, model_dump handles Path objects correctly if using Pydantic v2+
-                    # Let's ensure it produces a dict first
-                    data_to_save = output.model_dump(mode='json')
-                elif isinstance(output, (dict, list)):
-                     # If it's already a dict/list, we might need to manually convert Paths deep within
-                     # This requires a recursive function - more complex. Let's hope Pydantic handles it.
-                     # For simplicity, we assume Pydantic output first. If errors persist here,
-                     # we might need a recursive path-to-string converter.
-                     logger.warning(f"Output for step '{step_name}' is dict/list, manual Path conversion might be needed if serialization fails.")
-                     data_to_save = output # Try saving directly first
-                else:
-                     # Fallback for non-Pydantic, non-dict/list outputs
-                     data_to_save = str(output)
-
-                # Now serialize the processed data
+                # One-line serialization with a fallback to string conversion
                 with open(filepath, 'w') as f:
-                    # Use json.dump with default=str as a fallback for any other non-serializable types
-                    json.dump(data_to_save, f, indent=2, default=str)
-
-                logger.info(f"Successfully saved output for '{step_name}'.")
-
-            except TypeError as te:
-                # Specifically catch TypeError related to JSON serialization
-                 logger.error(f"JSON Serialization TypeError for step '{step_name}': {te}. Attempting fallback with default=str.")
-                 # Attempt fallback serialization, converting unknown types to string
-                 try:
-                      with open(filepath, 'w') as f:
-                           json.dump(output, f, indent=2, default=str) # Force conversion of non-serializable types
-                      logger.info(f"Successfully saved output for '{step_name}' using fallback serialization.")
-                 except Exception as e_fallback:
-                      logger.error(f"Fallback serialization also failed for step '{step_name}': {e_fallback}. Output type was: {type(output)}")
-
+                    json.dump(output, f, indent=2, default=lambda o: 
+                        o.model_dump(mode='json') if hasattr(o, 'model_dump') else str(o))
+                    
+                logger.info(f"Successfully saved output for '{step_name}'")
             except Exception as e:
-                 # Catch other potential errors during saving
-                 logger.error(f"Failed to save output for step '{step_name}': {e}. Output type was: {type(output)}")
-
-            return output # Must return the original output for crewAI
+                logger.error(f"Failed to save output for '{step_name}': {e}")
+                
+            return output
+        
         return save_output
 
     # --- Agent Definitions using @agent ---
 
     @agent
-    def pr_strategist(self) -> Agent:
-        """Creates the PR Strategist agent."""
-        agent_id = "pr_strategist" # Match key in agents.yaml
+    def pr_manager_agent(self) -> Agent:
+        """Creates the PR Manager agent (no tools for hierarchical process)."""
+        agent_id = "pr_manager_agent" # Match key in agents.yaml
         logger.info(f"Creating agent: {agent_id}")
         agent_config = self.agents_config[agent_id]
         logger.debug(f"{agent_id} config: {agent_config}")
 
-        # *** Define the tools for this agent explicitly here ***
-        strategist_tools = [
-            self.repo_analyzer_tool,
-            self.repo_metrics_tool,
-            self.pattern_analyzer_tool,
-            self.grouping_strategy_selector_tool,
-            self.file_grouper_tool,
-            # self.directory_analyzer_tool, # Add if used by its tasks
-        ]
-
         return Agent(
-            config=agent_config,          # Pass the loaded config dictionary
-            tools=strategist_tools,  # Assign the actual tool objects
-            verbose=self.verbose,         # Set verbosity from crew initialization
-            allow_delegation=agent_config.get('allow_delegation', False), # Ensure delegation is set
-            # memory=agent_config.get('memory', False) # Optionally configure memory
-            # llm=self.some_llm_instance # Optionally override LLM
+            config=self.agents_config[agent_id],
+            tools=[],  # Manager agent should not have tools in hierarchical process
+            verbose=self.verbose,
+            allow_delegation=True  # Manager MUST allow delegation
         )
 
     @agent
-    def pr_validator(self) -> Agent:
-        """Creates the PR Validator agent."""
-        agent_id = "pr_validator" # Match key in agents.yaml
+    def analysis_agent(self) -> Agent:
+        """Creates the Analysis agent."""
+        agent_id = "analysis_agent" # Match key in agents.yaml
         logger.info(f"Creating agent: {agent_id}")
         agent_config = self.agents_config[agent_id]
         logger.debug(f"{agent_id} config: {agent_config}")
 
-        # *** Define the tools for this agent explicitly here ***
-        validator_tools = [
-            self.group_validator_tool,
-            self.group_refiner_tool,
-        ]
-
         return Agent(
-            config=agent_config,
-            tools=validator_tools,
+            config=self.agents_config[agent_id],
+            tools=[
+                self.repo_analyzer_tool,
+                self.repo_metrics_tool,
+                self.pattern_analyzer_tool,
+                self.grouping_strategy_selector_tool,
+                self.batch_splitter_tool,
+            ],
             verbose=self.verbose,
-            allow_delegation=agent_config.get('allow_delegation', False),
-            # memory=agent_config.get('memory', False)
+            allow_delegation=False
+        )
+    
+    @agent
+    def batch_processor_agent(self) -> Agent:
+        """Creates the Batch Processor agent."""
+        agent_id = "batch_processor_agent"
+        logger.info(f"Creating agent: {agent_id}")
+        return Agent(
+            config=self.agents_config[agent_id],
+            tools=[
+                self.file_grouper_tool,
+                self.group_validator_tool,
+                self.group_refiner_tool,
+            ],
+            verbose=self.verbose,
+            allow_delegation=False
+        )
+
+    @agent
+    def merger_refiner_agent(self) -> Agent:
+        """Creates the Merger and Refiner agent that handles post-processing tasks."""
+        agent_id = "merger_refiner_agent"  # Add this to agents.yaml
+        logger.info(f"Creating agent: {agent_id}")
+        return Agent(
+            config=self.agents_config[agent_id],
+            tools=[
+                self.group_merging_tool,
+                self.group_validator_tool,
+                self.group_refiner_tool,
+            ],
+            verbose=self.verbose,
+            allow_delegation=False
         )
 
     # --- Task Definitions (Using correct pattern) ---
-
+    # Analysis Phase
     @task
-    def analyze_repository_changes(self) -> Task:
-        """Creates the 'analyze_repository_changes' task using config."""
-        task_id = "analyze_repository_changes"
-        logger.info(f"Creating task: {task_id}")
+    def initial_analysis(self) -> Task:
+        task_id = "initial_analysis"
         return Task(
             config=self.tasks_config[task_id],
-            agent=self.pr_strategist(), # Assign agent instance via method call
-            tools=[self.repo_analyzer_tool],
-            output_pydantic=RepositoryAnalysis,
-            callback=self._save_output_callback("step_1_analysis")
+            agent=self.analysis_agent(), # Assign correct agent
+            # Output handled by callback/framework
+            callback=self._save_output_callback("step_1_initial_analysis"),
+            output_pydantic=RepositoryAnalysis # Specify expected model type
         )
 
     @task
-    def calculate_repository_metrics(self) -> Task:
-        """Creates the 'calculate_repository_metrics' task using config."""
-        task_id = "calculate_repository_metrics"
-        logger.info(f"Creating task: {task_id}")
+    def calculate_global_metrics(self) -> Task:
+        task_id = "calculate_global_metrics"
         return Task(
             config=self.tasks_config[task_id],
-            agent=self.pr_strategist(), # Correct agent
-            tools=[self.repo_metrics_tool],
-            context=[self.analyze_repository_changes()],
-            output_pydantic=RepositoryMetrics,
-            callback=self._save_output_callback("step_2_metrics")
+            agent=self.analysis_agent(),
+            context=[self.initial_analysis()],
+            callback=self._save_output_callback("step_2_global_metrics"),
+             output_pydantic=RepositoryMetrics
         )
 
     @task
-    def analyze_change_patterns(self) -> Task:
-        """Creates the 'analyze_change_patterns' task using config."""
-        task_id = "analyze_change_patterns"
-        logger.info(f"Creating task: {task_id}")
+    def analyze_global_patterns(self) -> Task:
+        task_id = "analyze_global_patterns"
         return Task(
             config=self.tasks_config[task_id],
-            agent=self.pr_strategist(), # Correct agent
-            tools=[self.pattern_analyzer_tool],
-            context=[self.analyze_repository_changes()],
-            output_pydantic=PatternAnalysisResult,
-            callback=self._save_output_callback("step_3_patterns")
+            agent=self.analysis_agent(),
+            context=[self.initial_analysis()],
+            callback=self._save_output_callback("step_3_global_patterns"),
+             output_pydantic=PatternAnalysisResult
         )
-
-    # Optional: Task for Directory Analysis
-    # @task
-    # def analyze_directory_structure(self) -> Task:
-    #      task_id = "analyze_directory_structure" ...
 
     @task
     def select_grouping_strategy(self) -> Task:
-        """Creates the 'select_grouping_strategy' task using config."""
         task_id = "select_grouping_strategy"
-        logger.info(f"Creating task: {task_id}")
         return Task(
             config=self.tasks_config[task_id],
-            agent=self.pr_strategist(), # Correct agent
-            tools=[self.grouping_strategy_selector_tool],
-            context=[
-                self.analyze_repository_changes(),
-                self.calculate_repository_metrics(),
-                # Add context if needed by selector logic or agent prompt
-                # self.analyze_change_patterns(),
-            ],
-            output_pydantic=GroupingStrategyDecision,
-            callback=self._save_output_callback("step_4_strategy_decision")
+            agent=self.analysis_agent(),
+            context=[self.initial_analysis(), self.calculate_global_metrics(), self.analyze_global_patterns()],
+            callback=self._save_output_callback("step_4_strategy_decision"),
+            output_pydantic=GroupingStrategyDecision
         )
 
     @task
-    def generate_pr_groups(self) -> Task:
-        """Creates the 'generate_pr_groups' task using config."""
-        task_id = "generate_pr_groups"
-        logger.info(f"Creating task: {task_id}")
+    def split_into_batches(self) -> Task:
+        task_id = "split_into_batches"
         return Task(
             config=self.tasks_config[task_id],
-            agent=self.pr_strategist(), # Correct agent
-            tools=[self.file_grouper_tool],
-            context=[
-                self.analyze_repository_changes(),
-                self.calculate_repository_metrics(),
-                self.analyze_change_patterns(),
-                self.select_grouping_strategy(),
-            ],
-            output_pydantic=PRGroupingStrategy,
-            callback=self._save_output_callback("step_5_initial_groups")
+            agent=self.analysis_agent(),
+            context=[self.initial_analysis()], # Add others if tool needs them
+            callback=self._save_output_callback("step_5_split_batches"),
+            output_pydantic=BatchSplitterOutput
+            # Note: Ensure max_batch_size from kickoff is available in context if tool needs it
+        )
+    
+    # Manager Orchestration Task with Parallel Processing
+    @task
+    def coordinate_batch_processing(self) -> Task:
+        task_id = "coordinate_batch_processing"
+        logger.info(f"Creating manager task with parallel processing: {task_id}")
+        return Task(
+            config=self.tasks_config[task_id],
+            agent=self.pr_manager_agent(), # Manager executes this
+            context=[self.split_into_batches(), self.select_grouping_strategy()],
+            callback=self._save_output_callback("step_6_coordination_output"),
+            async_execution=False  # Disable async execution for parallel processing
+            # Output should be List[str] (JSON list of JSON strings)
+        )
+
+    # Task to be Delegated (Defined but not in main sequence)
+    @task
+    def process_single_batch(self) -> Task:
+        # This task definition primarily serves to inform the manager about its existence
+        # and the agent/tools capable of executing it during delegation.
+        task_id = "process_single_batch"
+        logger.info(f"Defining delegatable task: {task_id}")
+        return Task(
+            config=self.tasks_config[task_id],
+            agent=self.batch_processor_agent(), # Intended executor
+            # No context here, it's provided during delegation by the manager
+            # No callback here, result is returned to the manager
+            output_pydantic=PRGroupingStrategy # Expecting strategy JSON for the batch
+        )
+
+    # Merging & Finalization Phase (Now delegated to merger_refiner_agent)
+    @task
+    def merge_batch_results(self) -> Task:
+        task_id = "merge_batch_results"
+        return Task(
+            config=self.tasks_config[task_id],
+            agent=self.merger_refiner_agent(), # Refiner agent uses the tool now
+            context=[self.coordinate_batch_processing(), self.initial_analysis()],
+            callback=self._save_output_callback("step_7_merged_groups"),
+             output_pydantic=PRGroupingStrategy
         )
 
     @task
-    def validate_pr_groups(self) -> Task:
-        """Creates the 'validate_pr_groups' task using config."""
-        task_id = "validate_pr_groups"
-        logger.info(f"Creating task: {task_id}")
+    def final_validation(self) -> Task:
+        task_id = "final_validation"
         return Task(
             config=self.tasks_config[task_id],
-            agent=self.pr_validator(), # Assign agent instance via method call
-            tools=[self.group_validator_tool],
-            context=[
-                self.analyze_repository_changes(),
-                self.generate_pr_groups()
-            ],
-            output_pydantic=PRValidationResult,
-            callback=self._save_output_callback("step_6_validation")
+            agent=self.merger_refiner_agent(), # Refiner agent uses the tool now
+            context=[self.merge_batch_results(), self.initial_analysis()],
+            callback=self._save_output_callback("step_8_final_validation"),
+             output_pydantic=PRValidationResult
         )
 
     @task
-    def refine_pr_groups(self) -> Task:
-        """Creates the 'refine_pr_groups' task using config."""
-        task_id = "refine_pr_groups"
-        logger.info(f"Creating task: {task_id}")
-        final_output_filename = f"{Path(self.output_dir).name}_final_recommendations" # Cleaner filename
+    def final_refinement(self) -> Task:
+        task_id = "final_refinement"
+        final_output_filename = f"{self.output_dir.name}_final_recommendations"
         return Task(
             config=self.tasks_config[task_id],
-            agent=self.pr_validator(), # Correct agent
-            tools=[self.group_refiner_tool],
-            context=[
-                self.generate_pr_groups(),
-                self.validate_pr_groups()
-            ],
-            output_pydantic=PRGroupingStrategy,
-            callback=self._save_output_callback(final_output_filename)
+            agent=self.merger_refiner_agent(), # Refiner agent uses the tool now
+            context=[self.merge_batch_results(), self.final_validation(), self.initial_analysis()],
+            callback=self._save_output_callback(final_output_filename),
+            output_pydantic=PRGroupingStrategy
         )
 
     # --- Crew Definition ---
     @crew
     def crew(self) -> Crew:
-        """Creates the PR Recommendation crew."""
-        logger.info("Assembling the PR Recommendation crew...")
+        """Creates the Hierarchical PR Recommendation crew."""
+        logger.info("Assembling the Hierarchical PR Recommendation crew...")
         return Crew(
-            agents=[ # Provide agent instances from the @agent methods
-                self.pr_strategist(),
-                self.pr_validator()
+            agents=[  # Do NOT include manager_agent here
+                self.analysis_agent(),
+                self.batch_processor_agent(),
+                self.merger_refiner_agent(),  # Add the new agent for merging & refining
             ],
-            tasks=[ # Define the sequential flow by calling the @task methods
-                self.analyze_repository_changes(),
-                self.calculate_repository_metrics(),
-                self.analyze_change_patterns(),
-                # self.analyze_directory_structure(), # Optional task
+            tasks=[  # Define the main sequence controlled by the manager
+                self.initial_analysis(),
+                self.calculate_global_metrics(),
+                self.analyze_global_patterns(),
                 self.select_grouping_strategy(),
-                self.generate_pr_groups(),
-                self.validate_pr_groups(),
-                self.refine_pr_groups(),
+                self.split_into_batches(),
+                self.coordinate_batch_processing(), # Manager orchestrates batches here with parallelism
+                self.merge_batch_results(),
+                self.final_validation(),
+                self.final_refinement(),
+                # Note: process_single_batch task is NOT listed here.
+                # The manager delegates it dynamically during coordinate_batch_processing
             ],
-            process=Process.sequential,
+            process=Process.hierarchical, # Use hierarchical process
+            manager_agent=self.pr_manager_agent(), # Our manager agent
             verbose=self.verbose,
-            # memory=True,
+            memory=True, # Especially useful for our manager
             # cache=True
         )
