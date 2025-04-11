@@ -1,7 +1,6 @@
 # analysis_models
 import time
 from typing import List, Dict, Set, Optional
-
 from pydantic import Field, computed_field
 
 from .base_models import BaseModel, ConfigDict
@@ -11,7 +10,7 @@ from .directory_models import DirectorySummary
 class RepositoryAnalysis(BaseModel):
     """Model for repository analysis results"""
     model_config = ConfigDict(
-        extra='forbid'
+        extra='ignore'
     )
 
     # Use string path instead of Path
@@ -21,9 +20,10 @@ class RepositoryAnalysis(BaseModel):
     total_files_changed: int = Field(default=0, description="Total number of files with changes")
     total_lines_changed: int = Field(default=0, description="Total number of lines changed (added + deleted)")
     timestamp: float = Field(default_factory=lambda: time.time(), description="Timestamp of analysis")
+    error: Optional[str] = Field(None, description="Optional field to report errors during analysis.")
 
     # Computed properties
-    @computed_field
+    @computed_field(repr=False)  # type: ignore[misc]
     @property
     def extensions_summary(self) -> Dict[str, int]:
         """Summary of file extensions and their counts"""
@@ -35,7 +35,7 @@ class RepositoryAnalysis(BaseModel):
             extensions[ext] += 1
         return extensions
     
-    @computed_field
+    @computed_field(repr=False)  # type: ignore[misc]
     def directories(self) -> List[str]:
         """List of unique directories with changes (as strings)."""
         # Return a sorted list instead of a set
