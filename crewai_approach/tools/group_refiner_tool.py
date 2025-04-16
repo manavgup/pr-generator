@@ -12,22 +12,20 @@ from pydantic import BaseModel, Field, ValidationError
 from shared.utils.logging_utils import get_logger
 from .base_tool import BaseRepoTool
 from models.agent_models import PRGroupingStrategy, PRGroup, PRValidationResult, GroupingStrategyType
-from shared.models.analysis_models import RepositoryAnalysis
 
 logger = get_logger(__name__)
 
 class GroupRefinerToolSchema(BaseModel):
-    """Input schema for GroupRefiner."""
+    """Input schema for GroupRefiner using primitive types."""
     pr_grouping_strategy_json: str = Field(..., description="JSON string of the PRGroupingStrategy to refine.")
     pr_validation_result_json: str = Field(..., description="JSON string of the PRValidationResult containing issues.")
     # Add original analysis for the final refinement step to check completeness
     original_repository_analysis_json: Optional[str] = Field(None, description="JSON string of the original RepositoryAnalysis (required for final refinement).")
 
-class GroupRefiner(BaseRepoTool):
+class GroupRefinerTool(BaseRepoTool):
     name: str = "Group Refiner Tool"
     description: str = "Refines proposed PR groups based on validation results, fixing issues like duplicates, empty groups, and ensuring completeness in the final run."
     args_schema: Type[BaseModel] = GroupRefinerToolSchema
-    # repo_path might still be needed
 
     def _run(
         self,
@@ -36,14 +34,34 @@ class GroupRefiner(BaseRepoTool):
         original_repository_analysis_json: Optional[str] = None
     ) -> str:
         """Refines PR groups based on validation issues."""
+        # Echo received inputs for debugging
+        logger.info(f"GroupRefinerTool received pr_grouping_strategy_json: {pr_grouping_strategy_json[:100]}...")
+        logger.info(f"GroupRefinerTool received pr_validation_result_json: {pr_validation_result_json[:100]}...")
+        if original_repository_analysis_json:
+            logger.info(f"GroupRefinerTool received original_repository_analysis_json: {original_repository_analysis_json[:100]}...")
+        
         try:
+            # Validate input JSONs
+            if not self._validate_json_string(pr_grouping_strategy_json):
+                raise ValueError("Invalid pr_grouping_strategy_json provided")
+                
+            if not self._validate_json_string(pr_validation_result_json):
+                raise ValueError("Invalid pr_validation_result_json provided")
+                
+            if original_repository_analysis_json and not self._validate_json_string(original_repository_analysis_json):
+                raise ValueError("Invalid original_repository_analysis_json provided")
+            
+            # Deserialize inputs to Pydantic models
             grouping_strategy = PRGroupingStrategy.model_validate_json(pr_grouping_strategy_json)
             validation_result = PRValidationResult.model_validate_json(pr_validation_result_json)
-            original_repo_analysis = None
+            
+            # For the original repository analysis, we only need the file paths
+            original_file_paths = set()
             if original_repository_analysis_json:
-                original_repo_analysis = RepositoryAnalysis.model_validate_json(original_repository_analysis_json)
+                file_paths = self._extract_file_paths(original_repository_analysis_json)
+                original_file_paths = set(file_paths)
 
-            is_final_refinement = original_repo_analysis is not None
+            is_final_refinement = original_repository_analysis_json is not None
             logger.info(f"Refining {len(grouping_strategy.groups)} groups. Final refinement: {is_final_refinement}")
 
             if validation_result.is_valid and not is_final_refinement:
@@ -122,7 +140,6 @@ class GroupRefiner(BaseRepoTool):
             # 3. Handle Ungrouped Files (Only in Final Refinement)
             if is_final_refinement:
                 logger.info("Performing final completeness check.")
-                original_file_paths = {fc.path for fc in original_repo_analysis.file_changes}
                 current_grouped_files: Set[str] = set()
                 for group in refined_groups:
                     current_grouped_files.update(group.files)
@@ -175,7 +192,7 @@ class GroupRefiner(BaseRepoTool):
             )
 
             # Final check: Ensure all original files are accounted for if this was final refinement
-            if is_final_refinement:
+            if is_final_refinement and original_file_paths:
                  final_grouped_files: Set[str] = set()
                  for group in final_strategy.groups:
                      final_grouped_files.update(group.files)
@@ -187,21 +204,41 @@ class GroupRefiner(BaseRepoTool):
 
             return final_strategy.model_dump_json(indent=2)
 
+        except ValidationError as ve:
+            error_msg = f"Validation error during refinement: {str(ve)}"
+            logger.error(error_msg, exc_info=True)
+            try:
+                input_strategy = PRGroupingStrategy.model_validate_json(pr_grouping_strategy_json)
+                input_strategy.explanation += f"\n\n!! REFINEMENT FAILED: {error_msg} !!"
+                # Ensure the strategy type is valid even if loaded from potentially old data
+                if not isinstance(input_strategy.strategy_type, GroupingStrategyType):
+                    input_strategy.strategy_type = GroupingStrategyType.MIXED # Default if invalid
+                return input_strategy.model_dump_json(indent=2)
+            except:
+                # If that also fails, return a fresh default error strategy
+                error_strategy = PRGroupingStrategy(
+                    strategy_type=GroupingStrategyType.MIXED, 
+                    groups=[],
+                    explanation=f"Refinement failed critically: {error_msg}. Input strategy could not be parsed.",
+                    ungrouped_files=[]
+                )
+                return error_strategy.model_dump_json(indent=2)
         except Exception as e:
-            input_strategy = PRGroupingStrategy.model_validate_json(pr_grouping_strategy_json)
-            input_strategy.explanation += f"\n\n!! REFINEMENT FAILED: {e} !!"
-            # Ensure the strategy type is valid even if loaded from potentially old data
-            if not isinstance(input_strategy.strategy_type, GroupingStrategyType):
-                input_strategy.strategy_type = GroupingStrategyType.MIXED # Default if invalid
-            return input_strategy.model_dump_json(indent=2)
-        except Exception: # If input parsing fails, return a fresh default error strategy
-             error_strategy = PRGroupingStrategy(
-                 strategy_type=GroupingStrategyType.MIXED, # Use valid Enum member
-                 groups=[],
-                 explanation=f"Refinement failed critically: {e}. Input strategy could not be parsed.",
-                 ungrouped_files=[]
-             )
-             return error_strategy.model_dump_json(indent=2)
-
-
-# END OF FILE group_refiner_tool.py
+            error_msg = f"Unexpected error during refinement: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            try:
+                input_strategy = PRGroupingStrategy.model_validate_json(pr_grouping_strategy_json)
+                input_strategy.explanation += f"\n\n!! REFINEMENT FAILED: {error_msg} !!"
+                # Ensure the strategy type is valid even if loaded from potentially old data
+                if not isinstance(input_strategy.strategy_type, GroupingStrategyType):
+                    input_strategy.strategy_type = GroupingStrategyType.MIXED # Default if invalid
+                return input_strategy.model_dump_json(indent=2)
+            except:
+                # If that also fails, return a fresh default error strategy
+                error_strategy = PRGroupingStrategy(
+                    strategy_type=GroupingStrategyType.MIXED, 
+                    groups=[],
+                    explanation=f"Refinement failed critically: {error_msg}. Input strategy could not be parsed.",
+                    ungrouped_files=[]
+                )
+                return error_strategy.model_dump_json(indent=2)

@@ -110,3 +110,9 @@ coverage.xml
 
 # Old Source code that is being refactored
 old_src/
+
+# vscode history
+.history/
+
+# Old files
+crewai_approach/pr_generator_old/

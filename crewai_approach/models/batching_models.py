@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 from shared.models.git_models import FileChange # Assuming git_models is in the same parent dir
-from .agent_models import PatternAnalysisResult, PRGroupingStrategy # Assuming agent_models is in the same parent dir
+from .agent_models import PatternAnalysisResult, PRGroupingStrategy, GroupingStrategyDecision # Assuming agent_models is in the same parent dir
 from shared.models.analysis_models import RepositoryAnalysis # Assuming analysis_models is in the same parent dir
 
 # --- Input/Output for Batch Splitter ---
@@ -50,7 +50,9 @@ class WorkerBatchContext(BaseModel):
     repository_analysis: RepositoryAnalysis = Field(..., description="The full repository analysis (or a relevant subset/summary).")
     pattern_analysis: Optional[PatternAnalysisResult] = Field(None, description="Global pattern analysis results.")
     # Pass the globally chosen strategy
-    grouping_strategy_decision: Any # Replace 'Any' with your actual GroupingStrategyDecision model if defined
+    grouping_strategy_decision: GroupingStrategyDecision = Field(...,
+        description="The full GroupingStrategyDecision object containing the chosen strategy type and supporting info."
+    )
     # Potentially other global context needed by worker tasks
     repo_path: str = Field(..., description="Path to the repository.")
 

@@ -1,26 +1,22 @@
-# --- START OF FILE repo_metrics_tool.py ---
-
 """
 Repository metrics calculator for PR recommendation.
 """
-from typing import Dict, List, Any, Type, Optional # Added Type, Optional
+from typing import Dict, List, Any, Type, Optional
 import json
 import math
-from collections import defaultdict # Added defaultdict
+from collections import defaultdict
 
 from pydantic import BaseModel, Field, ValidationError
 
 from shared.utils.logging_utils import get_logger
-from shared.models.analysis_models import RepositoryAnalysis # For deserialization
-from models.agent_models import RepositoryMetrics # For result model validation (Assumed import)
-from .base_tool import BaseRepoTool # Corrected import assuming it's in the same directory
+from models.agent_models import RepositoryMetrics  # For result model validation
+from .base_tool import BaseRepoTool
 
 logger = get_logger(__name__)
 
 
 class RepositoryMetricsSchema(BaseModel):
-    """Input schema for Repository Metrics Calculator Tool."""
-    # Expect JSON string from previous step
+    """Input schema for Repository Metrics Calculator Tool using primitive types."""
     repository_analysis_json: str = Field(
         ...,
         description="JSON string serialization of the RepositoryAnalysis object."
@@ -39,9 +35,9 @@ class RepositoryMetricsCalculator(BaseRepoTool):
     Provides insights into directory structure, file distribution, and change patterns.
     Returns factual information without making strategy recommendations.
     """
-    args_schema: Type[BaseModel] = RepositoryMetricsSchema # Corrected type hint
+    args_schema: Type[BaseModel] = RepositoryMetricsSchema
 
-    def _run(self, repository_analysis_json: str) -> str: # Changed input and return type
+    def _run(self, repository_analysis_json: str) -> str:
         """
         Calculate objective metrics from repository analysis JSON data.
 
@@ -51,21 +47,37 @@ class RepositoryMetricsCalculator(BaseRepoTool):
         Returns:
             JSON string containing calculated metrics (RepositoryMetrics object).
         """
+        # Echo received inputs for debugging
+        logger.info(f"RepositoryMetricsCalculator received repository_analysis_json: {repository_analysis_json[:100]}...")
 
         try:
-            # Deserialize the input JSON string
-            repository_analysis = RepositoryAnalysis.model_validate_json(repository_analysis_json)
-            repo_path = str(repository_analysis.repo_path) # Get repo_path from the object
+            # Validate the input JSON
+            if not repository_analysis_json or not isinstance(repository_analysis_json, str):
+                raise ValueError("Invalid repository_analysis_json provided")
+
+            # Extract basic repository info
+            repo_info = self._extract_repository_info(repository_analysis_json)
+            repo_path = repo_info.get("repo_path", self._repo_path)
+            total_files_changed = repo_info.get("total_files_changed", 0)
+            total_lines_changed = repo_info.get("total_lines_changed", 0)
+            
             logger.info(f"Calculating repository metrics for {repo_path}")
-
-            # Extract data from the deserialized object
-            total_files_changed = repository_analysis.total_files_changed
-            total_lines_changed = repository_analysis.total_lines_changed
-            directory_summaries = repository_analysis.directory_summaries
-            file_changes = repository_analysis.file_changes
-
-            # Calculate extension summary directly from file_changes as it's more reliable
-            extensions_summary = self._extract_extensions_summary(file_changes)
+            
+            # Extract file metadata
+            file_metadata = self._extract_file_metadata(repository_analysis_json)
+            
+            # Extract directory summaries
+            directory_summaries = self._extract_directory_summaries(repository_analysis_json)
+            
+            # Extract file extensions
+            extensions_summary = repo_info.get("extensions_summary", {})
+            if not extensions_summary and file_metadata:
+                # Calculate from file metadata if not provided
+                extensions_summary = defaultdict(int)
+                for file_info in file_metadata:
+                    ext = file_info.get("extension") or "none"
+                    extensions_summary[ext] += 1
+                extensions_summary = dict(extensions_summary)
 
             # Calculate directory metrics
             directory_metrics = self._calculate_directory_metrics(
@@ -76,12 +88,12 @@ class RepositoryMetricsCalculator(BaseRepoTool):
             # Calculate file type metrics
             file_type_metrics = self._calculate_file_type_metrics(
                 extensions_summary=extensions_summary,
-                total_files=total_files_changed # Pass total_files
+                total_files=total_files_changed
             )
 
             # Calculate change distribution metrics
             change_metrics = self._calculate_change_metrics(
-                file_changes=file_changes
+                file_metadata=file_metadata
             )
 
             # Calculate complexity indicators (objective factors only)
@@ -89,11 +101,10 @@ class RepositoryMetricsCalculator(BaseRepoTool):
                 directory_summaries=directory_summaries,
                 total_files=total_files_changed,
                 total_lines=total_lines_changed,
-                file_changes=file_changes
+                file_metadata=file_metadata
             )
 
             # Construct the result using the RepositoryMetrics Pydantic model
-            # Ensure RepositoryMetrics model exists and matches this structure
             metrics_result = RepositoryMetrics(
                 repo_path=repo_path,
                 total_files_changed=total_files_changed,
@@ -132,22 +143,12 @@ class RepositoryMetricsCalculator(BaseRepoTool):
                      complexity_indicators=[], error=error_msg
                 )
                 return error_metrics.model_dump_json(indent=2)
-            except: # Fallback if error model fails
+            except:  # Fallback if error model fails
                  return json.dumps(error_data, indent=2)
 
-    # --- Helper Methods (Modified to use FileChange model) ---
+    # --- Helper Methods (Refactored to use primitives) ---
 
-    def _extract_extensions_summary(self, file_changes: List[Any]) -> Dict[str, int]: # Use FileChange if available
-        """Extract extensions summary from FileChange objects."""
-        extensions = defaultdict(int)
-        for change in file_changes:
-            # Assuming file_changes are FileChange objects now
-            ext = change.extension if change.extension else "none" # Use attribute
-            extensions[ext] += 1
-        return dict(extensions) # Convert back to dict for JSON
-
-
-    def _calculate_directory_metrics(self, directory_summaries: List[Any], total_files: int) -> Dict[str, Any]: # Use DirectorySummary if available
+    def _calculate_directory_metrics(self, directory_summaries: List[Dict[str, Any]], total_files: int) -> Dict[str, Any]:
         """Calculate metrics related to directory structure."""
         if not directory_summaries:
             # Return structure matching RepositoryMetrics.directory_metrics
@@ -159,9 +160,11 @@ class RepositoryMetricsCalculator(BaseRepoTool):
             }
 
         directory_count = len(directory_summaries)
-        # Assuming directory_summaries are DirectorySummary objects
-        file_counts = [d.file_count for d in directory_summaries]
+        
+        # Extract file counts from summaries
+        file_counts = [d.get("file_count", 0) for d in directory_summaries]
         max_files = max(file_counts) if file_counts else 0
+        
         # Use actual total_files passed in for average calculation base
         avg_files = total_files / directory_count if directory_count > 0 else 0.0
 
@@ -169,13 +172,21 @@ class RepositoryMetricsCalculator(BaseRepoTool):
 
         depths = []
         for dir_summary in directory_summaries:
-            # Assuming DirectorySummary has a depth attribute calculated during analysis
-            depths.append(dir_summary.depth)
+            # Get depth from the summary if available, otherwise calculate it
+            if "depth" in dir_summary:
+                depths.append(dir_summary["depth"])
+            else:
+                path = dir_summary.get("path", "")
+                if path == "(root)":
+                    depths.append(0)
+                else:
+                    depths.append(path.count('/') + 1)
 
         max_depth = max(depths) if depths else 0
         avg_depth = sum(depths) / len(depths) if depths else 0.0
 
-        multi_type_dirs = sum(1 for d in directory_summaries if len(d.extensions) > 1)
+        multi_type_dirs = sum(1 for d in directory_summaries 
+                            if len(d.get("extensions", {})) > 1)
 
         return {
             "directory_count": directory_count,
@@ -196,7 +207,6 @@ class RepositoryMetricsCalculator(BaseRepoTool):
              }
 
         file_type_count = len(extensions_summary)
-        # total_files = sum(extensions_summary.values()) # Already have total_files
 
         primary_file_type = max(extensions_summary, key=extensions_summary.get, default=None)
         primary_count = extensions_summary.get(primary_file_type, 0)
@@ -214,9 +224,9 @@ class RepositoryMetricsCalculator(BaseRepoTool):
             "file_type_distribution": distribution
         }
 
-    def _calculate_change_metrics(self, file_changes: List[Any]) -> Dict[str, Any]: # Use FileChange if available
+    def _calculate_change_metrics(self, file_metadata: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate metrics related to change patterns."""
-        if not file_changes:
+        if not file_metadata:
             # Return structure matching RepositoryMetrics.change_metrics
              return {
                  "avg_lines_per_file": 0.0, "max_lines_changed": 0,
@@ -230,11 +240,12 @@ class RepositoryMetricsCalculator(BaseRepoTool):
         large_threshold = 100
         small_threshold = 10
 
-        for change in file_changes:
-            # Assuming file_changes are FileChange objects with a 'changes' attribute (LineChanges model)
-            total_lines = 0
-            if change.changes:
-                total_lines = change.changes.added + change.changes.deleted
+        for file_info in file_metadata:
+            # Get total_changes from the metadata
+            total_lines = file_info.get("total_changes", 0)
+            if not total_lines and ("added_lines" in file_info or "deleted_lines" in file_info):
+                total_lines = file_info.get("added_lines", 0) + file_info.get("deleted_lines", 0)
+                
             lines_per_file.append(total_lines)
 
             if total_lines >= large_threshold:
@@ -244,7 +255,7 @@ class RepositoryMetricsCalculator(BaseRepoTool):
 
         avg_lines = sum(lines_per_file) / len(lines_per_file) if lines_per_file else 0.0
         max_lines = max(lines_per_file) if lines_per_file else 0
-        medium_changes = len(file_changes) - large_changes - small_changes
+        medium_changes = len(file_metadata) - large_changes - small_changes
 
         return {
             "avg_lines_per_file": round(avg_lines, 1),
@@ -259,10 +270,10 @@ class RepositoryMetricsCalculator(BaseRepoTool):
         }
 
     def _calculate_complexity_indicators(self,
-                                        directory_summaries: List[Any], # Use DirectorySummary
+                                        directory_summaries: List[Dict[str, Any]],
                                         total_files: int,
                                         total_lines: int,
-                                        file_changes: List[Any]) -> List[str]: # Use FileChange
+                                        file_metadata: List[Dict[str, Any]]) -> List[str]:
         """Calculate objective complexity indicators."""
         indicators = []
         if total_files > 50: indicators.append("large_file_count")
@@ -276,13 +287,17 @@ class RepositoryMetricsCalculator(BaseRepoTool):
         elif dir_metrics["directory_concentration"] < 0.3 and dir_metrics["directory_count"] > 3:
             indicators.append("highly_distributed_changes")
 
-        extensions = {fc.extension for fc in file_changes if fc.extension}
+        # Count unique extensions in file metadata
+        extensions = set()
+        for file_info in file_metadata:
+            ext = file_info.get("extension")
+            if ext:
+                extensions.add(ext)
+                
         extension_count = len(extensions)
         if extension_count > 5: indicators.append("many_file_types")
 
         if dir_metrics["directory_count"] > 3 and extension_count > 3:
             indicators.append("potential_cross_cutting_changes")
 
-        return sorted(list(set(indicators))) # Ensure unique and sorted
-
-# --- END OF FILE repo_metrics_tool.py ---
+        return sorted(list(set(indicators)))  # Ensure unique and sorted

@@ -14,7 +14,7 @@ from shared.utils.logging_utils import log_operation
 from shared.models.pr_models import (
     FileChange, PRSuggestion, PullRequestGroup
 )
-from shared.git_operations import get_changed_files
+from shared.tools.git_operations import get_changed_files
 
 logger = logging.getLogger(__name__)
 

@@ -55,27 +55,29 @@ split_into_batches:
 coordinate_batch_processing:
   description: >
     **CRITICAL ORCHESTRATION TASK:** As the PR Manager Agent, you must coordinate the processing of all file batches.
+    
+    IMPORTANT - JSON PROCESSING: When handling JSON data between tasks, always:
+    1. Remove any Markdown code block formatting (```) from JSON strings
+    2. Ensure JSON strings end with the proper closing bracket or brace - not with trailing backticks
+    3. When constructing context for worker tasks, validate that the JSON is properly formatted
+    
     Input Context: You will receive the BatchSplitterOutput JSON (from 'split_into_batches') containing the list of batches (each with file_ids)
     and the GroupingStrategyDecision JSON (from 'select_grouping_strategy').
 
     Your Goal: Process EACH batch in parallel by:
-    1. Construct the WorkerBatchContext JSON input required by the 'process_single_batch' task for each batch.
-    2. Delegate the 'process_single_batch' task to the 'batch_processor_agent' for ALL batches simultaneously.
+    1. Clean and format the JSON context to ensure it can be parsed properly
+    2. Construct the WorkerBatchContext JSON input required by the 'process_single_batch' task for each batch.
+    3. Delegate the 'process_single_batch' task to the 'batch_processor_agent' for ALL batches simultaneously.
     
     IMPORTANT: When using the delegation tool for parallel processing, provide these parameters:
     - task: "process_single_batch"
-    - context: The WorkerBatchContext JSON string for this batch
+    - context: The WorkerBatchContext JSON string for this batch (properly cleaned and validated)
     - coworker: "PR Batch Grouping Specialist"
     - async: True
     
-    3. Wait for all batch processing results to complete.
-    4. Collect and combine all the results.
-    5. Your final output for this task MUST be a JSON list containing ALL the PRGroupingStrategy JSON strings collected from processing each batch. Each PRGroupingStrategy must contain:
-       - strategy_type: The type of grouping strategy (e.g., "directory_based", "feature_based", "mixed")
-       - groups: List of PR group objects
-       - explanation: Explanation of the grouping results
-       - estimated_review_complexity: A numeric value from 1-10
-       - ungrouped_files: List of files that couldn't be grouped
+    4. Wait for all batch processing results to complete.
+    5. Collect and combine all the results.
+    6. Your final output for this task MUST be a JSON list containing ALL the PRGroupingStrategy JSON strings collected from processing each batch.
        
        Example format: [{{"strategy_type": "mixed", "groups": [...], "explanation": "Batch 1 explanation...", ...}}, {{"strategy_type": "directory_based", "groups": [...], ...}}]
   expected_output: >
@@ -83,21 +85,23 @@ coordinate_batch_processing:
     returned by the 'batch_processor_agent' for one processed batch.
     Each PRGroupingStrategy object must include: strategy_type, groups, explanation, estimated_review_complexity, and ungrouped_files.
   agent: pr_manager_agent
-  # No specific tools needed for coordination itself, relies on delegation capability.
-
 # ----- Task Delegated by Manager (Executed by BatchProcessorAgent) -----
 
 process_single_batch:
   description: >
     Process the assigned batch of files. Input is a WorkerBatchContext JSON containing file_ids and the global strategy.
-    1. Use 'file_grouper_tool' to generate initial groups for the files in the batch based on the provided strategy.
-    2. Use 'group_validator_tool' (in batch mode) to validate the generated groups.
-    3. Use 'group_refiner_tool' (in batch mode) to refine the groups based on validation results.
+    IMPORTANT: Before using any JSON content in tool arguments, ensure it is properly cleaned
+    of any Markdown formatting like triple backticks (```) or code block syntax.
+    
+    1. Clean all JSON strings to remove any trailing backticks that might cause parsing errors.
+    2. Use 'file_grouper_tool' to generate initial groups for the files in the batch based on the provided strategy.
+    3. Use 'group_validator_tool' (in batch mode) to validate the generated groups.
+    4. Use 'group_refiner_tool' (in batch mode) to refine the groups based on validation results.
+    
     Ensure the output is the refined PRGroupingStrategy for *only* the files processed in this batch.
   expected_output: >
     A JSON string serialization of the refined PRGroupingStrategy object specific to the processed batch.
-  agent: batch_processor_agent # This is the designated worker
-  # Context for this task is provided dynamically by the manager during delegation.
+  agent: batch_processor_agent
 
 
 # ----- Merging and Finalization Tasks (Now Executed by MergerRefinerAgent) -----

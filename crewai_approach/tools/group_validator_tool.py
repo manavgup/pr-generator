@@ -15,6 +15,7 @@ from models.agent_models import PRGroupingStrategy, PRValidationResult, GroupVal
 logger = get_logger(__name__)
 
 class GroupValidatorToolSchema(BaseModel):
+    """Input schema for GroupValidatorTool using primitive types."""
     pr_grouping_strategy_json: str = Field(..., description="JSON string of the PRGroupingStrategy object to validate.")
     # Optional flag to indicate final validation, if specific rules apply
     is_final_validation: bool = Field(default=False, description="Set to true if this is the final validation after merging batches.")
@@ -26,7 +27,26 @@ class GroupValidatorTool(BaseRepoTool):
 
     def _run(self, pr_grouping_strategy_json: str, is_final_validation: bool = False) -> str:
         """Validates the PR groups."""
+        # Echo received inputs for debugging
+        logger.info(f"GroupValidatorTool received pr_grouping_strategy_json: {pr_grouping_strategy_json[:100]}...")
+        logger.info(f"GroupValidatorTool received is_final_validation: {is_final_validation}")
+        
         try:
+            # Additional cleaning specific to this tool
+            pr_grouping_strategy_json = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', pr_grouping_strategy_json)
+
+            # Validate input JSON
+            if not self._validate_json_string(pr_grouping_strategy_json):
+                raise ValueError("Invalid pr_grouping_strategy_json provided")
+            
+            # Try parsing as JSON first to ensure it's valid
+            try:
+                json.loads(pr_grouping_strategy_json)
+            except json.JSONDecodeError as je:
+                logger.error(f"JSON parsing error: {je}")
+                raise ValueError(f"Cannot parse pr_grouping_strategy_json: {je}")
+                
+            # Deserialize input to PRGroupingStrategy
             grouping_strategy = PRGroupingStrategy.model_validate_json(pr_grouping_strategy_json)
             logger.info(f"Validating {len(grouping_strategy.groups)} groups. Final validation: {is_final_validation}")
 
@@ -113,5 +133,3 @@ class GroupValidatorTool(BaseRepoTool):
                 strategy_type=GroupingStrategyType.MIXED # Or some default
             )
             return error_result.model_dump_json(indent=2)
-
-# END OF FILE group_validator_tool.py

@@ -40,7 +40,7 @@ try:
     from crewai_approach.tools.group_merging_tool import GroupMergingTool
     from crewai_approach.tools.file_grouper_tool import FileGrouperTool
     from crewai_approach.tools.group_validator_tool import GroupValidatorTool
-    from crewai_approach.tools.group_refiner_tool import GroupRefiner
+    from crewai_approach.tools.group_refiner_tool import GroupRefinerTool
     from crewai_approach.tools.directory_analyzer_tool import DirectoryAnalyzer # Import the fixed analyzer
 except ImportError as e:
     print(f"ERROR: Could not import tools for testing: {e}")
@@ -686,7 +686,7 @@ class TestPRTools(unittest.TestCase):
     def test_group_refiner_tool_with_log_data(self, mock_gitops_init):
         """Test GroupRefiner tool fixing issues using log-like original analysis."""
         print("\n--- Testing GroupRefiner (with log-like original data) ---")
-        tool = GroupRefiner(repo_path=MOCK_REPO_PATH)
+        tool = GroupRefinerTool(repo_path=MOCK_REPO_PATH)
         tool._git_ops = MagicMock()
 
         # --- Inputs ---

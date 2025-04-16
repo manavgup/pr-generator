@@ -1,6 +1,6 @@
 # crew.py
 import json
-import os
+import re
 from pathlib import Path
 from typing import Optional, Dict, List
 
@@ -26,7 +26,7 @@ from .tools.group_merging_tool import GroupMergingTool
 # Worker Tools
 from .tools.file_grouper_tool import FileGrouperTool
 from .tools.group_validator_tool import GroupValidatorTool
-from .tools.group_refiner_tool import GroupRefiner
+from .tools.group_refiner_tool import GroupRefinerTool
 
 logger = get_logger(__name__)
 
@@ -81,7 +81,7 @@ class HierarchicalPRCrew:
         self.group_merging_tool = GroupMergingTool(repo_path=str(self.repo_path))
         self.file_grouper_tool = FileGrouperTool(repo_path=str(self.repo_path))
         self.group_validator_tool = GroupValidatorTool(repo_path=str(self.repo_path))
-        self.group_refiner_tool = GroupRefiner(repo_path=str(self.repo_path))
+        self.group_refiner_tool = GroupRefinerTool(repo_path=str(self.repo_path))
 
         # Create a map for easy access by name if needed elsewhere, though direct access is fine too
         self.tools_map = {
@@ -131,6 +131,12 @@ class HierarchicalPRCrew:
             logger.info(f"Saving output for step '{step_name}' to {filepath}")
             
             try:
+                # Clean the output if it's a string and contains code block markers
+                if isinstance(output, str):
+                    # Remove code block markers
+                    output = re.sub(r'```json\s*', '', output)
+                    output = re.sub(r'```\s*$', '', output)
+
                 # One-line serialization with a fallback to string conversion
                 with open(filepath, 'w') as f:
                     json.dump(output, f, indent=2, default=lambda o: 

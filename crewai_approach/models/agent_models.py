@@ -150,3 +150,163 @@ class GroupingStrategyDecision(BaseModel):
     recommendations: List[StrategyRecommendation] = Field(..., description="List of all considered strategies, ranked by confidence")
     repository_metrics: Dict[str, Any] = Field(..., description="Key repository metrics used for the selection decision")
     explanation: str = Field(..., description="Summary explanation for the chosen strategy")
+
+class SimplifiedFileChange(BaseModel):
+    """Minimal file change information compatible with crewAI."""
+    path: str = Field(..., description="Path of the changed file")
+    directory: str = Field("", description="Directory containing the file")
+    extension: str = Field("", description="File extension")
+    added_lines: int = Field(0, description="Number of added lines")
+    deleted_lines: int = Field(0, description="Number of deleted lines")
+    
+    @property
+    def total_changes(self) -> int:
+        """Total number of lines changed."""
+        return self.added_lines + self.deleted_lines
+    
+    @property
+    def name(self) -> str:
+        """Filename extracted from path."""
+        import os
+        return os.path.basename(self.path)
+
+class SimplifiedDirectorySummary(BaseModel):
+    """Minimal directory summary information compatible with crewAI."""
+    path: str = Field(..., description="Path of the directory")
+    file_count: int = Field(0, description="Number of files in this directory")
+    total_changes: int = Field(0, description="Total number of changes in this directory")
+    extensions: Dict[str, int] = Field(default_factory=dict, description="Count of file extensions in this directory")
+    depth: int = Field(0, description="Depth of the directory in the repository")
+
+class SimplifiedRepositoryAnalysis(BaseModel):
+    """Simplified version of RepositoryAnalysis that uses only primitive types."""
+    repo_path: str = Field(..., description="Path to the git repository")
+    total_files_changed: int = Field(0, description="Total number of files with changes")
+    total_lines_changed: int = Field(0, description="Total number of lines changed (added + deleted)")
+    
+    # Instead of complex nested models, use primitive types for crewAI compatibility
+    file_paths: List[str] = Field(default_factory=list, description="List of file paths that changed")
+    directory_paths: List[str] = Field(default_factory=list, description="List of directories with changes")
+    file_extensions: Dict[str, int] = Field(default_factory=dict, description="Map of extensions to count")
+    
+    # Optional detailed information as serialized JSON strings
+    # These fields can be included when needed but won't be passed to crewAI directly
+    file_changes_json: Optional[str] = Field(None, description="JSON string of file changes for detail processing")
+    directory_summaries_json: Optional[str] = Field(None, description="JSON string of directory summaries for detail processing")
+    
+    @classmethod
+    def from_full_analysis(cls, full_analysis, include_details: bool = False):
+        """Create a simplified version from a full RepositoryAnalysis object."""
+        # Extract basic properties
+        simplified = cls(
+            repo_path=full_analysis.repo_path,
+            total_files_changed=full_analysis.total_files_changed,
+            total_lines_changed=full_analysis.total_lines_changed,
+            file_paths=[fc.path for fc in full_analysis.file_changes if fc.path],
+            directory_paths=[ds.path for ds in full_analysis.directory_summaries if ds.path],
+            file_extensions=full_analysis.extensions_summary if hasattr(full_analysis, 'extensions_summary') else {}
+        )
+        
+        # Optionally include serialized JSON for detailed information
+        if include_details:
+            import json
+            from pydantic import BaseModel
+            
+            # Convert file changes to simplified versions
+            simplified_changes = []
+            for fc in full_analysis.file_changes:
+                if not hasattr(fc, 'path') or not fc.path:
+                    continue
+                    
+                # Extract basic info safely
+                added = getattr(fc.changes, 'added', 0) if hasattr(fc, 'changes') else 0
+                deleted = getattr(fc.changes, 'deleted', 0) if hasattr(fc, 'changes') else 0
+                
+                simplified_changes.append(SimplifiedFileChange(
+                    path=fc.path,
+                    directory=fc.directory if hasattr(fc, 'directory') else "",
+                    extension=fc.extension if hasattr(fc, 'extension') else "",
+                    added_lines=added,
+                    deleted_lines=deleted
+                ))
+            
+            # Convert directory summaries to simplified versions
+            simplified_summaries = []
+            for ds in full_analysis.directory_summaries:
+                if not hasattr(ds, 'path') or not ds.path:
+                    continue
+                    
+                simplified_summaries.append(SimplifiedDirectorySummary(
+                    path=ds.path,
+                    file_count=ds.file_count if hasattr(ds, 'file_count') else 0,
+                    total_changes=ds.total_changes if hasattr(ds, 'total_changes') else 0,
+                    extensions=ds.extensions if hasattr(ds, 'extensions') else {},
+                    depth=len(ds.path.split('/')) if ds.path else 0
+                ))
+            
+            # Serialize to JSON strings
+            simplified.file_changes_json = json.dumps([
+                change.model_dump() for change in simplified_changes
+            ])
+            
+            simplified.directory_summaries_json = json.dumps([
+                summary.model_dump() for summary in simplified_summaries
+            ])
+        
+        return simplified
+    
+    def get_directory_to_files_mapping(self) -> Dict[str, List[str]]:
+        """Create a mapping of directories to the files they contain."""
+        mapping = {}
+        
+        # If we have detailed file change information, use it
+        if self.file_changes_json:
+            import json
+            try:
+                file_changes = json.loads(self.file_changes_json)
+                for fc in file_changes:
+                    if not fc.get('path') or not fc.get('directory'):
+                        continue
+                    
+                    directory = fc.get('directory')
+                    if directory not in mapping:
+                        mapping[directory] = []
+                    
+                    mapping[directory].append(fc.get('path'))
+            except Exception:
+                pass  # Fall back to basic mapping if JSON parsing fails
+        
+        # If we don't have detailed info or parsing failed, create a basic mapping
+        if not mapping and self.file_paths:
+            import os
+            for file_path in self.file_paths:
+                directory = os.path.dirname(file_path)
+                if directory not in mapping:
+                    mapping[directory] = []
+                mapping[directory].append(file_path)
+        
+        return mapping
+    
+    def extract_file_changes(self) -> List[SimplifiedFileChange]:
+        """Extract file changes from the JSON string if available."""
+        if not self.file_changes_json:
+            return []
+            
+        import json
+        try:
+            file_changes_data = json.loads(self.file_changes_json)
+            return [SimplifiedFileChange(**fc) for fc in file_changes_data]
+        except Exception:
+            return []
+    
+    def extract_directory_summaries(self) -> List[SimplifiedDirectorySummary]:
+        """Extract directory summaries from the JSON string if available."""
+        if not self.directory_summaries_json:
+            return []
+            
+        import json
+        try:
+            directory_summaries_data = json.loads(self.directory_summaries_json)
+            return [SimplifiedDirectorySummary(**ds) for ds in directory_summaries_data]
+        except Exception:
+            return []

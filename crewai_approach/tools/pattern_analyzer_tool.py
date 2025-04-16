@@ -1,102 +1,108 @@
-# --- START OF FILE pattern_analyzer_tool.py ---
-
 """
 Pattern analyzer tool for identifying patterns in file changes.
 """
-from typing import List, Dict, Any, Optional, Set, Type # Added Type
+from typing import List, Dict, Any, Optional, Set, Type
 import re
 import json
 from collections import defaultdict
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
-# Assuming RepositoryAnalysis and FileChange are correctly defined here
-from shared.models.analysis_models import RepositoryAnalysis, FileChange
+
+from models.agent_models import PatternAnalysisResult
 from shared.utils.logging_utils import get_logger
 from .base_tool import BaseRepoTool
 
 logger = get_logger(__name__)
 
 class PatternAnalyzerToolSchema(BaseModel):
-    """Input schema for the PatternAnalyzer tool."""
-    repository_analysis_json: str = Field(..., description="JSON string serialization of the RepositoryAnalysis object.")
+    """Input schema for the PatternAnalyzer tool using primitive types only."""
+    file_paths: List[str] = Field(..., description="List of file paths to analyze for patterns")
+    # Optional parameter to provide directory info if available
+    directory_to_files: Optional[Dict[str, List[str]]] = Field(None, description="Optional mapping of directories to files")
 
-# Placeholder definition for the structure returned by the tool.
-# In a real scenario, this would likely be imported from models.agent_models
-class PatternAnalysisResultStructure(BaseModel):
-    naming_patterns: List[Dict[str, Any]] = Field(default_factory=list)
-    similar_names: List[Dict[str, Any]] = Field(default_factory=list)
-    common_patterns: Dict[str, List[Dict[str, Any]]] = Field(default_factory=lambda: {"common_prefixes": [], "common_suffixes": []})
-    related_files: List[Dict[str, Any]] = Field(default_factory=list)
-    analysis_summary: str = ""
-    confidence: float = 0.0
-    error: Optional[str] = None
+class SimplifiedFileInfo(BaseModel):
+    """Minimal file information needed for pattern analysis."""
+    path: str
+    name: str = ""
+    directory: str = ""
+    extension: str = ""
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.path and not self.name:
+            path_obj = Path(self.path)
+            self.name = path_obj.name
+            self.directory = str(path_obj.parent)
+            self.extension = path_obj.suffix
 
 
 class PatternAnalyzerTool(BaseRepoTool):
     """Tool for identifying patterns in file changes to detect related modifications."""
 
     name: str = "Pattern Analyzer"
-    description: str = "Identifies patterns in file changes based on repository analysis JSON. Returns PatternAnalysisResultStructure JSON."
+    description: str = "Identifies patterns in file changes based on file paths. Returns PatternAnalysisResult JSON."
     args_schema: Type[BaseModel] = PatternAnalyzerToolSchema
 
-    def _run(self, repository_analysis_json: str) -> str:
+    def _run(
+        self,
+        file_paths: List[str],
+        directory_to_files: Optional[Dict[str, List[str]]] = None
+    ) -> str:
         """
         Analyze patterns in file changes to detect related modifications.
 
         Args:
-            repository_analysis_json: JSON string of RepositoryAnalysis data.
+            file_paths: List of file paths to analyze
+            directory_to_files: Optional dictionary mapping directories to file lists
 
         Returns:
-            JSON string containing pattern analysis information (PatternAnalysisResultStructure).
+            JSON string containing pattern analysis information (PatternAnalysisResult).
         """
+        # Echo received inputs for debugging
+        logger.info(f"PatternAnalyzerTool received {len(file_paths)} file paths")
+        if directory_to_files:
+            logger.info(f"PatternAnalyzerTool received directory mapping with {len(directory_to_files)} directories")
+        
         repo_path = self.git_ops.repo_path if hasattr(self, 'git_ops') and self.git_ops else "unknown"
         logger.info(f"Analyzing file change patterns for {repo_path}")
 
         try:
-            # Deserialize input JSON to Pydantic object
-            repository_analysis = RepositoryAnalysis.model_validate_json(repository_analysis_json)
-
-            # --- Corrected Data Extraction ---
-            # Access attribute directly from the Pydantic object
-            file_changes_list: List[FileChange] = repository_analysis.file_changes if repository_analysis.file_changes else []
-
-            if not file_changes_list:
-                 logger.warning(f"No file changes found in analysis for {repo_path}. Returning empty pattern result.")
-                 result = PatternAnalysisResultStructure(analysis_summary="No file changes found.")
+            if not file_paths:
+                 logger.warning(f"No file paths provided for analysis. Returning empty pattern result.")
+                 result = PatternAnalysisResult(analysis_summary="No file paths provided.")
                  return result.model_dump_json(indent=2)
 
-            # Extract file names and paths using attribute access
+            # --- Prepare simplified file information ---
+            file_info_list: List[SimplifiedFileInfo] = []
+            for file_path in file_paths:
+                if file_path:  # Ensure not empty
+                    file_info = SimplifiedFileInfo(path=file_path)
+                    file_info_list.append(file_info)
+
+            # Extract file names and paths
             file_names: List[str] = []
-            file_paths: List[str] = []
-            for fc in file_changes_list:
-                # Use the path attribute from the FileChange object
-                file_path_str = fc.path
-                if file_path_str: # Ensure path exists
-                    file_paths.append(file_path_str)
-                    # Derive filename from the path attribute
-                    filename = Path(file_path_str).name
-                    file_names.append(filename)
-                else:
-                    logger.warning("Found a FileChange object with no path.")
-            # --- End Corrected Data Extraction ---
+            file_paths_processed: List[str] = []
+            for fi in file_info_list:
+                if fi.path:  # Ensure path exists
+                    file_paths_processed.append(fi.path)
+                    file_names.append(fi.name)
+            # --- End data preparation ---
 
-
-            # Analyze file naming patterns (using file_names list)
+            # Analyze file naming patterns
             naming_patterns = self._analyze_naming_patterns(file_names)
 
-            # Find files with similar names (using file_names and file_paths lists)
-            similar_names = self._find_similar_names(file_names, file_paths)
+            # Find files with similar names
+            similar_names = self._find_similar_names(file_names, file_paths_processed)
 
-            # Analyze common prefixes/suffixes (using file_names and file_paths lists)
-            common_patterns = self._analyze_common_patterns(file_names, file_paths)
+            # Analyze common prefixes/suffixes
+            common_patterns = self._analyze_common_patterns(file_names, file_paths_processed)
 
-            # Detect file pairs that often change together (using the list of FileChange objects)
-            related_files = self._detect_related_files(file_changes_list)
+            # Detect file pairs that often change together
+            related_files = self._detect_related_files(file_info_list)
 
-            # Construct the result using the placeholder structure
-            # Note: If an actual PatternAnalysisResult model exists, use that instead.
-            result = PatternAnalysisResultStructure(
+            # Construct the result using the proper model
+            result = PatternAnalysisResult(
                 naming_patterns=naming_patterns,
                 similar_names=similar_names,
                 common_patterns={
@@ -105,31 +111,25 @@ class PatternAnalyzerTool(BaseRepoTool):
                 },
                 related_files=related_files,
                 analysis_summary="Pattern analysis completed successfully.",
-                confidence=0.8 # Placeholder confidence
+                confidence=0.8  # Placeholder confidence
             )
 
             logger.info(f"Pattern analysis complete for {repo_path}.")
             return result.model_dump_json(indent=2)
 
-        except ValidationError as ve:
-            error_msg = f"Pydantic validation error during pattern analysis for {repo_path}: {str(ve)}"
-            logger.error(error_msg, exc_info=True)
-            error_result = PatternAnalysisResultStructure(analysis_summary=error_msg, confidence=0.0, error=error_msg)
-            return error_result.model_dump_json(indent=2)
-        except json.JSONDecodeError as je:
-            error_msg = f"Failed to decode input repository_analysis_json for {repo_path}: {str(je)}"
-            logger.error(error_msg, exc_info=True)
-            error_result = PatternAnalysisResultStructure(analysis_summary=error_msg, confidence=0.0, error=error_msg)
-            return error_result.model_dump_json(indent=2)
         except Exception as e:
-            # Catch potential AttributeErrors if FileChange model is missing expected fields
-            error_msg = f"Unexpected error analyzing file patterns for {repo_path}: {str(e)}"
+            # Catch all errors and return a valid PatternAnalysisResult with error info
+            error_msg = f"Error analyzing file patterns: {str(e)}"
             logger.error(error_msg, exc_info=True)
-            error_result = PatternAnalysisResultStructure(analysis_summary=error_msg, confidence=0.0, error=error_msg)
+            error_result = PatternAnalysisResult(
+                analysis_summary=error_msg, 
+                confidence=0.0, 
+                error=error_msg
+            )
             return error_result.model_dump_json(indent=2)
 
 
-    # --- Helper Methods (Input types updated, internal logic checked) ---
+    # --- Helper Methods (Updated for simplified file info) ---
 
     def _analyze_naming_patterns(self, file_names: List[str]) -> List[Dict[str, Any]]:
         """Analyze naming patterns in files."""
@@ -197,10 +197,7 @@ class PatternAnalyzerTool(BaseRepoTool):
                 if i == j or name2 in processed: continue
                 base_name2 = Path(name2).stem
 
-                # Check if base names are similar enough (adjust logic if needed)
-                # Original logic: one contained in the other. Stem matching might be better.
-                # if base_name1 in base_name2 or base_name2 in base_name1:
-                # Let's use a slightly different check: exact stem match or test_ prefix match
+                # Check if base names are similar enough
                 is_similar = (base_name1 == base_name2 or
                               base_name1 == f"test_{base_name2}" or
                               base_name2 == f"test_{base_name1}")
@@ -267,48 +264,41 @@ class PatternAnalyzerTool(BaseRepoTool):
             "common_suffixes": common_suffix_groups
         }
 
-    def _detect_related_files(self, file_changes_list: List[FileChange]) -> List[Dict[str, Any]]:
+    def _detect_related_files(self, file_info_list: List[SimplifiedFileInfo]) -> List[Dict[str, Any]]:
         """Detect files that are likely related based on heuristics."""
-        # This method now receives List[FileChange]. Access attributes correctly.
+        # Updated to work with SimplifiedFileInfo instead of FileChange
         related_groups = []
-
-        # Group by directory (already correct using attribute access internally if FileChange model has 'directory')
-        # dir_to_files = defaultdict(list)
-        # for fc in file_changes_list:
-        #     directory = fc.directory # Assumes FileChange has directory attr
-        #     if fc.path: dir_to_files[directory].append(fc.path)
 
         # --- Look for implementation/test pairs ---
         impl_test_pairs = []
         processed_impl = set() # Avoid duplicating pairs if both impl and test trigger match
 
-        for fc in file_changes_list:
-            if not fc.path or fc.path in processed_impl: continue
+        for file_info in file_info_list:
+            if not file_info.path or file_info.path in processed_impl: continue
 
-            # Use Path object for easier manipulation
-            current_path_obj = Path(fc.path)
-            filename = current_path_obj.name
-            file_stem = current_path_obj.stem # Name without final suffix
-            file_suffix = current_path_obj.suffix # e.g., ".py"
+            filename = file_info.name
+            file_stem = Path(filename).stem # Name without final suffix
+            file_suffix = Path(filename).suffix # e.g., ".py"
 
             # Potential implementation file pattern (simple check)
             if not filename.startswith("test_") and file_suffix in ['.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cs']:
                 # Look for corresponding test file
                 expected_test_stem = f"test_{file_stem}"
-                for other_fc in file_changes_list:
-                    if not other_fc.path: continue
-                    other_path_obj = Path(other_fc.path)
-                    # Check stem and suffix match, and ensure they are in same/related directory (optional check)
+                for other_file in file_info_list:
+                    if not other_file.path: continue
+                    other_filename = other_file.name
+                    other_path_obj = Path(other_filename)
+                    # Check stem and suffix match
                     if other_path_obj.stem == expected_test_stem and other_path_obj.suffix == file_suffix:
                         # Basic check passed, add pair
                          impl_test_pairs.append({
-                            "file1": fc.path,
-                            "file2": other_fc.path,
+                            "file1": file_info.path,
+                            "file2": other_file.path,
                             "relation_type": "implementation_test",
                             "base_name": file_stem
                         })
-                         processed_impl.add(fc.path) # Mark impl as processed
-                         processed_impl.add(other_fc.path) # Mark test as processed
+                         processed_impl.add(file_info.path) # Mark impl as processed
+                         processed_impl.add(other_file.path) # Mark test as processed
                          break # Found test, move to next file
 
         if impl_test_pairs:
@@ -318,33 +308,31 @@ class PatternAnalyzerTool(BaseRepoTool):
             })
 
         # --- Look for model/schema pairs (example) ---
-        # Simplified version, adjust regex/logic as needed for specific project conventions
         model_schema_pairs = []
         processed_model = set()
 
-        for fc in file_changes_list:
-            if not fc.path or fc.path in processed_model: continue
-            current_path_obj = Path(fc.path)
-            filename = current_path_obj.name
+        for file_info in file_info_list:
+            if not file_info.path or file_info.path in processed_model: continue
+            filename = file_info.name
 
             # Potential model file pattern (e.g., *Model.py)
             model_match = re.match(r'^(.+)(?:Model|Dto)\.(py|js|ts|cs|java)$', filename)
             if model_match:
                 base_name = model_match.group(1)
                 # Look for corresponding schema/validator file (e.g., *Schema.py or *Validator.py)
-                schema_pattern = re.compile(f'^{base_name}(?:Schema|Validator)\.(py|js|ts|cs|java)$')
-                for other_fc in file_changes_list:
-                    if not other_fc.path: continue
-                    other_filename = Path(other_fc.path).name
+                schema_pattern = re.compile(rf'^{base_name}(?:Schema|Validator)\.(py|js|ts|cs|java)$')
+                for other_file in file_info_list:
+                    if not other_file.path: continue
+                    other_filename = other_file.name
                     if schema_pattern.match(other_filename):
                         model_schema_pairs.append({
-                            "file1": fc.path,
-                            "file2": other_fc.path,
+                            "file1": file_info.path,
+                            "file2": other_file.path,
                             "relation_type": "model_schema_validator",
                             "base_name": base_name
                         })
-                        processed_model.add(fc.path)
-                        processed_model.add(other_fc.path)
+                        processed_model.add(file_info.path)
+                        processed_model.add(other_file.path)
                         break
 
         if model_schema_pairs:
@@ -353,8 +341,4 @@ class PatternAnalyzerTool(BaseRepoTool):
                 "pairs": model_schema_pairs
             })
 
-        # Add more relationship detection logic here (e.g., Component/Stylesheet)
-
         return related_groups
-
-# --- END OF FILE pattern_analyzer_tool.py ---
