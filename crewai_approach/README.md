@@ -108,29 +108,35 @@ The system uses YAML files for agent and task configurations, managed by CrewBas
 
 ## Agent Configuration (agents.yaml)
 ```
-# Agent definitions used by CrewBase
-# Agent definitions used by CrewBase
-pr_strategist:
-  role: "Expert in organizing code changes..."
-  goal: "Analyze repository changes, select strategy, generate initial groups..."
-  backstory: "You're a senior software architect..."
-  tools: # Tools this agent is allowed to use across its tasks
-    - repo_analyzer
-    - repo_metrics
-    - pattern_analyzer
-    - grouping_strategy_selector
-    - file_grouper
-    # - directory_analyzer
+# Example agents.yaml reflecting current crew.py structure
+analysis_agent:
+  role: "Repository Analyzer & Strategist"
+  goal: "Perform initial analysis, calculate metrics, identify patterns, select strategy, split into batches."
+  backstory: "Meticulous software analyst..."
+  # Tools assigned in crew.py:
+  # - repo_analyzer_tool
+  # - repo_metrics_tool
+  # - pattern_analyzer_tool
+  # - grouping_strategy_selector_tool
+  # - batch_splitter_tool
   allow_delegation: false
-  # verbose controlled by crew setting
 
-pr_validator:
-  role: "Quality assurance specialist..."
-  goal: "Validate and refine PR suggestions..."
-  backstory: "You're a meticulous code reviewer..."
-  tools:
-    - group_validator
-    - group_refiner
+batch_processor_agent:
+  role: "PR Batch Grouping Specialist"
+  goal: "Process all file batches sequentially using the consolidated tool."
+  backstory: "Focused developer executing batch processing..."
+  # Tools assigned in crew.py:
+  # - batch_processor_tool
+  allow_delegation: false
+
+merger_refiner_agent:
+  role: "PR Merger & Refinement Specialist"
+  goal: "Merge batch results, refine group names via LLM, validate, and perform final structural refinement."
+  backstory: "Senior architect ensuring final quality and coherence..."
+  # Tools assigned in crew.py:
+  # - group_merging_tool
+  # - group_validator_tool
+  # - group_refiner_tool
   allow_delegation: false
 ```
 
@@ -148,11 +154,73 @@ calculate_repository_metrics:
   description: "Using the RepositoryAnalysis from the previous step..."
   expected_output: "A RepositoryMetrics object containing..."
 
-# ... entries for all 7 tasks ...
+# ... entries for all tasks ...
 
 refine_pr_groups:
   description: "Review the validation results (from validate_pr_groups)..."
   expected_output: "A final, refined PRGroupingStrategy object..."
+```
+
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant Runner as Crew Runner
+    participant AA as Analysis Agent
+    participant BPA as Batch Processor Agent
+    participant MRA as Merger/Refiner Agent
+
+    Runner->>AA: Kickoff Crew (with inputs)
+
+    activate AA
+    Note over AA: Task: initial_analysis<br/>Tool: repo_analyzer_tool
+    AA-->>Runner: Result (RepositoryAnalysis JSON String)
+    deactivate AA
+
+    activate AA
+    Note over AA: Task: calculate_global_metrics<br/>Tool: repo_metrics_tool<br/>Context: initial_analysis
+    AA-->>Runner: Result (RepositoryMetrics)
+    deactivate AA
+
+    activate AA
+    Note over AA: Task: analyze_global_patterns<br/>Tool: pattern_analyzer_tool<br/>Context: initial_analysis
+    AA-->>Runner: Result (PatternAnalysisResult)
+    deactivate AA
+
+    activate AA
+    Note over AA: Task: select_grouping_strategy<br/>Tool: grouping_strategy_selector_tool<br/>Context: initial_analysis, global_metrics, global_patterns
+    AA-->>Runner: Result (GroupingStrategyDecision)
+    deactivate AA
+
+    activate AA
+    Note over AA: Task: split_into_batches<br/>Tool: batch_splitter_tool<br/>Context: initial_analysis
+    AA-->>Runner: Result (BatchSplitterOutput JSON String)
+    deactivate AA
+
+    activate BPA
+    Note over BPA: Task: process_batches_and_generate_results<br/>Tool: batch_processor_tool<br/>Context: split_into_batches, select_grouping_strategy, initial_analysis, analyze_global_patterns
+    BPA-->>Runner: Result (JSON Array String of Batch PRGroupingStrategy results)
+    deactivate BPA
+
+    activate MRA
+    Note over MRA: Task: merge_batch_results<br/>Tool: group_merging_tool<br/>Context: process_batches_and_generate_results, initial_analysis
+    MRA-->>Runner: Result (Merged PRGroupingStrategy)
+    deactivate MRA
+
+    activate MRA
+    Note over MRA: Task: refine_group_names<br/>(LLM Reasoning / No Specific Tool)<br/>Context: merge_batch_results
+    MRA-->>Runner: Result (Name-Refined PRGroupingStrategy)
+    deactivate MRA
+
+    activate MRA
+    Note over MRA: Task: final_validation<br/>Tool: group_validator_tool<br/>Context: refine_group_names
+    MRA-->>Runner: Result (PRValidationResult)
+    deactivate MRA
+
+    activate MRA
+    Note over MRA: Task: final_refinement<br/>Tool: group_refiner_tool<br/>Context: refine_group_names, final_validation, initial_analysis
+    MRA-->>Runner: Final Result (Final PRGroupingStrategy)
+    deactivate MRA
 ```
 
 ## Output

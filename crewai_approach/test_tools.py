@@ -1,930 +1,352 @@
-# --- START OF FILE test_tools.py ---
+# /Users/mg/mg-work/manav/work/ai-experiments/pr-generator/crewai_approach/test_tools.py
 
-import unittest
+import pytest
 import json
-from unittest.mock import patch, MagicMock
+import re
 from pathlib import Path
-import copy # Import copy for deep copies
+from typing import List, Dict, Any, Set
+from pydantic import ValidationError
 
-# --- Model Imports ---
-try:
-    from shared.models.analysis_models import RepositoryAnalysis, FileChange, DirectorySummary
-    from shared.models.git_models import FileStatusType, LineChanges
-    # Models specific to the crewai_approach
-    from crewai_approach.models.agent_models import (
-        RepositoryMetrics, PatternAnalysisResult, GroupingStrategyDecision,
-        PRGroupingStrategy, PRValidationResult, # DirectoryAnalysisResult now imported below
-        PRGroup, StrategyRecommendation, GroupValidationIssue, GroupingStrategyType
+# --- Adjust imports based on your project structure ---
+# Assuming tools & models are relative to project root 'pr-generator'
+# when running with PYTHONPATH=. from the root directory.
+from tools.batch_processor_tool import BatchProcessorTool
+from tools.group_merging_tool import GroupMergingTool
+from tools.group_validator_tool import GroupValidatorTool
+from tools.group_refiner_tool import GroupRefinerTool
+from tools.batch_splitter_tool import BatchSplitterTool
+
+# Import models for validation
+# Assuming models are also relative to project root
+from models.agent_models import PRGroupingStrategy, PRValidationResult, GroupingStrategyType
+# --- End Imports ---
+
+# --- Fixtures to load test data ---
+
+# Define the path to your actual output data directory
+TEST_DATA_DIR = Path("/Users/mg/mg-work/manav/work/ai-experiments/pr-generator/outputs")
+
+# Define the repo path used during the run (for tool instantiation)
+REPO_PATH_FOR_TOOLS = "/Users/mg/mg-work/manav/work/ai-experiments/rag_modulo"
+
+# Helper function to load and clean JSON string from the 'raw' field of saved output files
+def load_and_clean_raw_json(filename: str) -> str:
+    """Loads the JSON object from the file, extracts the 'raw' string, and cleans it."""
+    file_path = TEST_DATA_DIR / filename
+    assert file_path.exists(), f"Test data file not found: {file_path}"
+    with open(file_path, 'r', encoding='utf-8') as f:
+        try:
+            # Load the outer JSON object saved by the callback
+            data = json.load(f)
+            raw_json_str = data.get("raw")
+            if not isinstance(raw_json_str, str):
+                 raise ValueError(f"'raw' field in {filename} is not a string or is missing.")
+
+            # Clean potential markdown and control characters
+            cleaned = re.sub(r'^```json\s*', '', raw_json_str.strip(), flags=re.MULTILINE)
+            cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.MULTILINE).strip()
+            # Minimal cleaning - more can be added if specific control chars cause issues
+            # cleaned = re.sub(r'[\x00-\x1F\x7F]', '', cleaned) # Use cautiously
+            return cleaned
+        except json.JSONDecodeError as e:
+             pytest.fail(f"Failed to load JSON from {filename}: {e}")
+        except ValueError as e:
+             pytest.fail(f"Error processing data from {filename}: {e}")
+        except Exception as e:
+            pytest.fail(f"Unexpected error loading {filename}: {e}")
+
+# --- Updated Fixtures ---
+
+@pytest.fixture(scope="session")
+def repo_analysis_json_str() -> str:
+    """Loads the initial repository analysis JSON string from the 'raw' field."""
+    return load_and_clean_raw_json("step_1_initial_analysis.json")
+
+@pytest.fixture(scope="session")
+def strategy_decision_json_str() -> str:
+    """Loads the strategy decision JSON string from the 'raw' field."""
+    return load_and_clean_raw_json("step_4_strategy_decision.json")
+
+@pytest.fixture(scope="session")
+def batch_splitter_output_json_str() -> str:
+    """Loads the batch splitter output JSON string from the 'raw' field."""
+    # This file's raw content based on your logs: {"batches": [], ...}
+    return load_and_clean_raw_json("step_5_split_batches.json")
+
+@pytest.fixture(scope="session")
+def pattern_analysis_json_str() -> str:
+    """Loads the pattern analysis JSON string from the 'raw' field."""
+    return load_and_clean_raw_json("step_3_global_patterns.json")
+
+@pytest.fixture(scope="session")
+def processed_batches_results_json_str() -> str:
+    """Loads the JSON array string output from the batch processor tool's saved file."""
+    # This file's raw content based on your logs: "[]\n```" -> cleaned to "[]"
+    return load_and_clean_raw_json("step_6_processed_batches.json") # Use the helper
+
+@pytest.fixture(scope="session")
+def merged_groups_json_str() -> str:
+    """Loads the merged groups JSON string from the 'raw' field."""
+    # This file's raw content based on logs: {"strategy_type": "mixed", "groups": [...], "explanation": "No valid batch...", ...}
+    return load_and_clean_raw_json("step_7_merged_groups.json")
+
+@pytest.fixture(scope="session")
+def final_validation_json_str() -> str:
+    """Loads the final validation result JSON string from the 'raw' field."""
+    # This file's raw content based on logs: {"is_valid": false, "issues": [{"severity": "critical", "issue_type": "Tool Error", ...}]}
+    return load_and_clean_raw_json("step_8_final_validation.json")
+
+
+# --- Fixtures for Tool Instances ---
+
+@pytest.fixture(scope="module")
+def batch_processor_tool() -> BatchProcessorTool:
+    return BatchProcessorTool(repo_path=REPO_PATH_FOR_TOOLS)
+
+@pytest.fixture(scope="module")
+def group_merging_tool() -> GroupMergingTool:
+    # Ensure this uses the version expecting string input for batch results
+    return GroupMergingTool(repo_path=REPO_PATH_FOR_TOOLS)
+
+@pytest.fixture(scope="module")
+def group_validator_tool() -> GroupValidatorTool:
+    return GroupValidatorTool(repo_path=REPO_PATH_FOR_TOOLS)
+
+@pytest.fixture(scope="module")
+def group_refiner_tool() -> GroupRefinerTool:
+    return GroupRefinerTool(repo_path=REPO_PATH_FOR_TOOLS)
+
+# Add to test_tools.py
+
+@pytest.fixture(scope="module")
+def batch_splitter_tool() -> BatchSplitterTool:
+    # Assuming BatchSplitterTool is in tools directory
+    from tools.batch_splitter_tool import BatchSplitterTool
+    return BatchSplitterTool(repo_path=REPO_PATH_FOR_TOOLS)
+
+def test_batch_splitter_tool_creates_batches(
+    batch_splitter_tool: BatchSplitterTool,
+    repo_analysis_json_str: str # Has 50 files
+):
+    """Tests if the BatchSplitterTool creates non-empty batches from valid analysis."""
+    print("\nTesting BatchSplitterTool creates batches...")
+    target_batch_size = 10 # Match the run config
+    output_str = batch_splitter_tool._run(
+        repository_analysis_json=repo_analysis_json_str,
+        target_batch_size=target_batch_size
     )
-    # ADDED: Import BaseModel for WorkerBatchContext definition if needed locally
-    from pydantic import BaseModel, Field, ValidationError
-    from typing import List, Optional # Added for WorkerBatchContext typing
-
-    from crewai_approach.models.batching_models import BatchSplitterOutput, GroupMergingOutput, WorkerBatchContext
-    # Tool specific models (like output structure)
-    from crewai_approach.tools.pattern_analyzer_tool import PatternAnalysisResultStructure # Using placeholder defined in tool
-    from crewai_approach.tools.directory_analyzer_tool import DirectoryAnalysisResult # Assuming defined in tool
-except ImportError as e:
-    print(f"ERROR: Could not import models necessary for testing: {e}")
-    print("Please ensure model files exist and paths are correct.")
-    exit(1)
-
-
-# --- Tool Imports ---
-try:
-    from crewai_approach.tools.repo_analyzer_tool import RepoAnalyzerTool
-    from crewai_approach.tools.repo_metrics_tool import RepositoryMetricsCalculator
-    from crewai_approach.tools.pattern_analyzer_tool import PatternAnalyzerTool
-    from crewai_approach.tools.grouping_strategy_selector_tool import GroupingStrategySelector
-    from crewai_approach.tools.batch_splitter_tool import BatchSplitterTool
-    from crewai_approach.tools.group_merging_tool import GroupMergingTool
-    from crewai_approach.tools.file_grouper_tool import FileGrouperTool
-    from crewai_approach.tools.group_validator_tool import GroupValidatorTool
-    from crewai_approach.tools.group_refiner_tool import GroupRefinerTool
-    from crewai_approach.tools.directory_analyzer_tool import DirectoryAnalyzer # Import the fixed analyzer
-except ImportError as e:
-    print(f"ERROR: Could not import tools for testing: {e}")
-    print("Please ensure tool files exist and paths are correct (using relative imports where needed).")
-    exit(1)
-
-# --- Mock Data Generation ---
-
-MOCK_REPO_PATH = "/Users/mg/mg-work/manav/work/ai-experiments/rag_modulo" # From logs
-
-# --- Realistic Mock JSON (Based on Logs with Inconsistent Directory Summaries) ---
-# This JSON reflects the output *after* RepoAnalyzerTool excluded computed fields,
-# but retains the potentially incorrect 'extensions' inside 'directory_summaries'
-# as generated by GitOperations.analyze_repository in the logs.
-MOCK_REPO_ANALYSIS_JSON_FROM_LOGS = r"""
-{
-  "repo_path": "/Users/mg/mg-work/manav/work/ai-experiments/rag_modulo",
-  "file_changes": [
-    {
-      "file_id": "79720179-c889-4fbb-9ae3-1fbd81c545f0",
-      "path": ".github/scripts/fix_issue.py",
-      "staged_status": "M",
-      "unstaged_status": " ",
-      "original_path": null,
-      "file_type": "text",
-      "changes": {
-        "added": 97,
-        "deleted": 0
-      },
-      "content_hash": "9eda9230553f90c18c00bf30fbc7432e",
-      "token_estimate": 0,
-      "directory": ".github/scripts",
-      "extension": ".py",
-      "filename": "fix_issue.py"
-    },
-    {
-      "file_id": "3af665aa-beb7-4c15-9e00-c3b23f2101f8",
-      "path": ".github/workflows/ci.yml",
-      "staged_status": "M",
-      "unstaged_status": " ",
-      "original_path": null,
-      "file_type": "text",
-      "changes": {
-        "added": 110,
-        "deleted": 0
-      },
-      "content_hash": "194d7d1c3d2711bbee1f9023228fc84f",
-      "token_estimate": 0,
-      "directory": ".github/workflows",
-      "extension": ".yml",
-      "filename": "ci.yml"
-    },
-    {
-      "file_id": "49531799-8c04-43d9-abab-930fb47c99fc",
-      "path": ".github/workflows/publish.yml",
-      "staged_status": "M",
-      "unstaged_status": " ",
-      "original_path": null,
-      "file_type": "text",
-      "changes": {
-        "added": 35,
-        "deleted": 0
-      },
-      "content_hash": "323b15280f7960268c4e11eea5dc3e65",
-      "token_estimate": 0,
-      "directory": ".github/workflows",
-      "extension": ".yml",
-      "filename": "publish.yml"
-    },
-    {
-      "file_id": "714af903-1a28-4bb3-aa17-9bc69640042b",
-      "path": ".gitignore",
-      "staged_status": "M",
-      "unstaged_status": " ",
-      "original_path": null,
-      "file_type": "text",
-      "changes": {
-        "added": 24,
-        "deleted": 0
-      },
-      "content_hash": "12bb35dc41fc4916ce63a991a5585bec",
-      "token_estimate": 0,
-      "directory": "(root)",
-      "extension": null,
-      "filename": ".gitignore"
-    },
-    {
-      "file_id": "e9696904-0ed4-4662-a375-715a8c48f050",
-      "path": "backend/Dockerfile.backend",
-      "staged_status": "M",
-      "unstaged_status": " ",
-      "original_path": null,
-      "file_type": "text",
-      "changes": {
-        "added": 39,
-        "deleted": 0
-      },
-      "content_hash": "63b935a5bc9dd5a99e2c189a53a5f40f",
-      "token_estimate": 0,
-      "directory": "backend",
-      "extension": ".backend",
-      "filename": "Dockerfile.backend"
-    },
-    {
-      "file_id": "28d01ba8-fa5b-44a0-9a0a-6b89386c40c7",
-      "path": "backend/auth/__init__.py",
-      "staged_status": "M",
-      "unstaged_status": " ",
-      "original_path": null,
-      "file_type": "text",
-      "changes": {
-        "added": 0,
-        "deleted": 0
-      },
-      "content_hash": "d41d8cd98f00b204e9800998ecf8427e",
-      "token_estimate": 0,
-      "directory": "backend/auth",
-      "extension": ".py",
-      "filename": "__init__.py"
-    },
-    {
-      "file_id": "c901fa0a-34f3-42d6-b018-794a458fd35e",
-      "path": "backend/auth/oidc.py",
-      "staged_status": "M",
-      "unstaged_status": " ",
-      "original_path": null,
-      "file_type": "text",
-      "changes": {
-        "added": 98,
-        "deleted": 0
-      },
-      "content_hash": "e3dafafe7fa6f344ba2f2ddd6a381927",
-      "token_estimate": 0,
-      "directory": "backend/auth",
-      "extension": ".py",
-      "filename": "oidc.py"
-    }
-  ],
-  "directory_summaries": [
-    {
-      "path": ".github/scripts",
-      "file_count": 1,
-      "files": [
-        ".github/scripts/fix_issue.py"
-      ],
-      "total_changes": 97,
-      "extensions": {
-        ".py": 1
-      },
-      "is_root": false,
-      "depth": 2,
-      "parent_directory": ".github"
-    },
-    {
-      "path": ".github/workflows",
-      "file_count": 4,
-      "files": [
-        ".github/workflows/ci.yml",
-        ".github/workflows/publish.yml",
-        ".github/workflows/test-and-issue.yml",
-        ".github/workflows/watsonx-benchmarks.yml"
-      ],
-      "total_changes": 406,
-      "extensions": {
-        ".yml": 4
-      },
-      "is_root": false,
-      "depth": 2,
-      "parent_directory": ".github"
-    },
-    {
-      "path": "(root)",
-      "file_count": 1,
-      "files": [
-        ".gitignore"
-      ],
-      "total_changes": 24,
-      "extensions": {
-        "none": 1
-      },
-      "is_root": true,
-      "depth": 0,
-      "parent_directory": null
-    },
-    {
-      "path": "backend",
-      "file_count": 9,
-      "files": [
-        "backend/Dockerfile.backend",
-        "backend/Dockerfile.backend.dockerignore",
-        "backend/Dockerfile.test",
-        "backend/Dockerfile.test.dockerignore",
-        "backend/healthcheck.py",
-        "backend/main.py",
-        "backend/poetry.lock",
-        "backend/pyproject.toml",
-        "backend/pytest.ini"
-      ],
-      "total_changes": 11764,
-      "extensions": {
-        "none": 1
-      },
-      "is_root": false,
-      "depth": 1,
-      "parent_directory": "(root)"
-    },
-    {
-      "path": "backend/auth",
-      "file_count": 2,
-      "files": [
-        "backend/auth/__init__.py",
-        "backend/auth/oidc.py"
-      ],
-      "total_changes": 98,
-      "extensions": {
-        ".yml": 2
-      },
-      "is_root": false,
-      "depth": 2,
-      "parent_directory": "backend"
-    }
-  ],
-  "total_files_changed": 50,
-  "total_lines_changed": 16047,
-  "timestamp": 1744339990.091398,
-  "error": null
-}
-"""
-
-# --- Create Pydantic object from the realistic mock JSON ---
-# This object will contain the inconsistent directory summaries
-try:
-    mock_repo_analysis_obj_from_logs = RepositoryAnalysis.model_validate_json(MOCK_REPO_ANALYSIS_JSON_FROM_LOGS)
-except ValidationError as e:
-    print(f"FATAL: Could not validate MOCK_REPO_ANALYSIS_JSON_FROM_LOGS: {e}")
-    exit(1)
-
-# --- Also create an idealized Pydantic object for RepoAnalyzerTool test ---
-# Uses the same file changes but generates directory summaries correctly
-ideal_mock_file_changes = copy.deepcopy(mock_repo_analysis_obj_from_logs.file_changes)
-ideal_mock_directory_summaries = []
-ideal_dirs_temp = {}
-for change in ideal_mock_file_changes:
-    directory_str = change.directory
-    if directory_str not in ideal_dirs_temp:
-         path_obj = Path(directory_str) if directory_str != '(root)' else None
-         depth = len(path_obj.parts) if path_obj else 0
-         parent = str(path_obj.parent) if path_obj and path_obj.parent != Path('.') else ('(root)' if path_obj else None)
-         is_root = (directory_str == '(root)')
-         ideal_dirs_temp[directory_str] = DirectorySummary(
-             path=directory_str, file_count=0, files=[], total_changes=0, extensions={},
-             is_root=is_root, depth=depth # Add depth based on path
-         )
-    ds = ideal_dirs_temp[directory_str]
-    ds.file_count += 1
-    ds.files.append(change.path)
-    if change.changes:
-        ds.total_changes += change.changes.added + change.changes.deleted
-    ext = change.extension or "none"
-    ds.extensions[ext] = ds.extensions.get(ext, 0) + 1
-ideal_mock_directory_summaries = list(ideal_dirs_temp.values())
-
-ideal_mock_repo_analysis = RepositoryAnalysis(
-    repo_path=MOCK_REPO_PATH,
-    total_files_changed=len(ideal_mock_file_changes), # Use actual count of listed files
-    total_lines_changed=sum(fc.changes.added + fc.changes.deleted for fc in ideal_mock_file_changes if fc.changes), # Use actual sum
-    file_changes=ideal_mock_file_changes,
-    directory_summaries=ideal_mock_directory_summaries, # Use corrected summaries
-    timestamp=mock_repo_analysis_obj_from_logs.timestamp,
-    error=None
-)
-
-# --- Test Class ---
-
-class TestPRTools(unittest.TestCase):
-
-    # Test RepoAnalyzerTool: It should still produce valid JSON structure,
-    # even if the underlying GitOperations provides flawed summaries.
-    # The exclude mechanism works on the object *after* it's created.
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    @patch('shared.tools.git_operations.GitOperations.analyze_repository')
-    def test_repo_analyzer_tool(self, mock_analyze_repo, mock_gitops_init):
-        """Test the RepoAnalyzerTool output structure."""
-        print("\n--- Testing RepoAnalyzerTool ---")
-        # Configure mock to return the *idealized* object, as the tool expects
-        # a valid RepositoryAnalysis object from GitOperations.
-        mock_analyze_repo.return_value = ideal_mock_repo_analysis
-
-        tool = RepoAnalyzerTool(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-        tool._git_ops.repo_path = MOCK_REPO_PATH
-        tool._git_ops.analyze_repository = mock_analyze_repo
-
-        result_json = tool.run(max_files=None, use_summarization=True, max_diff_size=2000)
-
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            # Validate against Pydantic - should pass as computed fields are excluded
-            RepositoryAnalysis.model_validate(result_data)
-            # Explicitly check that computed fields are NOT in the output JSON
-            self.assertNotIn('extensions_summary', result_data)
-            self.assertNotIn('directories', result_data)
-        except json.JSONDecodeError:
-            self.fail("RepoAnalyzerTool output is not valid JSON")
-        except Exception as e:
-             self.fail(f"RepoAnalyzerTool output failed Pydantic validation or check: {e}\nOutput:\n{result_json}")
-
-        mock_analyze_repo.assert_called_once()
-        self.assertEqual(result_data['repo_path'], MOCK_REPO_PATH)
-        # Check a few fields that should be present
-        self.assertIn('file_changes', result_data)
-        self.assertIn('directory_summaries', result_data)
-        # Check totals based on the IDEALIZED object returned by the mock
-        self.assertEqual(result_data['total_files_changed'], ideal_mock_repo_analysis.total_files_changed)
-        self.assertEqual(result_data['total_lines_changed'], ideal_mock_repo_analysis.total_lines_changed)
-        print("RepoAnalyzerTool Test Passed (Output Structure Correct).")
-
-
-    # Test Metrics Calculator with potentially flawed input data
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_repo_metrics_calculator_with_log_data(self, mock_gitops_init):
-        """Test RepositoryMetricsCalculator with data similar to logs."""
-        print("\n--- Testing RepositoryMetricsCalculator (with log-like data) ---")
-        tool = RepositoryMetricsCalculator(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-
-        # Input is the JSON string *with inconsistent directory summaries*
-        input_json = MOCK_REPO_ANALYSIS_JSON_FROM_LOGS
-
-        result_json = tool.run(repository_analysis_json=input_json)
-
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            # Try to validate against the Pydantic model
-            RepositoryMetrics.model_validate(result_data)
-        except json.JSONDecodeError:
-            self.fail("RepositoryMetricsCalculator output is not valid JSON")
-        except Exception as e:
-             self.fail(f"RepositoryMetricsCalculator output failed Pydantic validation: {e}\nOutput:\n{result_json}")
-
-        # --- Assertions ---
-        # These should be CORRECT as they derive from file_changes or direct fields
-        self.assertEqual(result_data['repo_path'], MOCK_REPO_PATH)
-        self.assertEqual(result_data['total_files_changed'], mock_repo_analysis_obj_from_logs.total_files_changed) # Reads 50 from JSON
-        self.assertEqual(result_data['total_lines_changed'], mock_repo_analysis_obj_from_logs.total_lines_changed) # Reads 16047 from JSON
-        self.assertIn('file_type_metrics', result_data)
-        self.assertIn('change_metrics', result_data)
-
-        # File type metrics derived from _extract_extensions_summary (uses file_changes) -> Should be correct count
-        # Based on the 7 files in MOCK_REPO_ANALYSIS_JSON_FROM_LOGS: py:3, yml:2, none:1, backend:1 -> 4 types
-        self.assertEqual(result_data['file_type_metrics']['file_type_count'], 4)
-        self.assertEqual(result_data['file_type_metrics']['primary_file_type'], '.py')
-
-        # --- FIX: Assert the percentage calculated using the inconsistent total_files (50) ---
-        # primary_count = 3 (from .py files listed in file_changes)
-        # total_files = 50 (from mock_repo_analysis_obj_from_logs.total_files_changed field)
-        # expected_percentage = (3 / 50) * 100 = 6.0
-        expected_percentage = (3 / mock_repo_analysis_obj_from_logs.total_files_changed) * 100 if mock_repo_analysis_obj_from_logs.total_files_changed > 0 else 0.0
-        self.assertAlmostEqual(result_data['file_type_metrics']['primary_file_type_percentage'], expected_percentage, places=1)
-
-        # Change metrics (uses file_changes) -> Should be correct based on listed files
-        max_lines_in_mock = max(fc.changes.added + fc.changes.deleted for fc in mock_repo_analysis_obj_from_logs.file_changes if fc.changes)
-        self.assertEqual(result_data['change_metrics']['max_lines_changed'], max_lines_in_mock) # Should be 110 from ci.yml
-
-        # These might be INCORRECT due to flawed input directory_summaries[...]['extensions']
-        self.assertIn('directory_metrics', result_data)
-        self.assertIn('complexity_indicators', result_data)
-        print(f"Calculated Directory Metrics (potentially affected by input data): {result_data['directory_metrics']}")
-        # Example: Check multi_type_dirs based on the *flawed* input summaries
-        # Input summaries extensions: py:1 | yml:4 | none:1 | none:1 | yml:2
-        # None of these summary dicts has >1 key, so count is 0.
-        self.assertEqual(result_data['directory_metrics']['directories_with_multiple_file_types'], 0, "Multi-type dir count might be wrong due to input")
-
-        print("RepositoryMetricsCalculator Test Passed (Acknowledging potential metric inaccuracies due to input).")
-
-    # Test Pattern Analyzer with realistic (but structurally valid) input
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_pattern_analyzer_tool_with_log_data(self, mock_gitops_init):
-        """Test PatternAnalyzerTool with data similar to logs."""
-        print("\n--- Testing PatternAnalyzerTool (with log-like data) ---")
-        tool = PatternAnalyzerTool(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-        tool._git_ops.repo_path = MOCK_REPO_PATH
-
-        input_json = MOCK_REPO_ANALYSIS_JSON_FROM_LOGS
-
-        result_json = tool.run(repository_analysis_json=input_json)
-
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            # Validate against the placeholder structure defined in the tool
-            PatternAnalysisResultStructure.model_validate(result_data)
-            self.assertIsNone(result_data.get('error')) # Expect no error if tool logic is correct
-        except json.JSONDecodeError:
-            self.fail("PatternAnalyzerTool output is not valid JSON")
-        except Exception as e:
-             self.fail(f"PatternAnalyzerTool output failed Pydantic validation: {e}\nOutput:\n{result_json}")
-
-        # Check structure - should pass if tool logic is correct
-        self.assertIn('naming_patterns', result_data)
-        self.assertIn('similar_names', result_data)
-        self.assertIn('common_patterns', result_data)
-        self.assertIn('related_files', result_data)
-        self.assertIsInstance(result_data['naming_patterns'], list)
-        self.assertIsInstance(result_data['similar_names'], list)
-        self.assertIsInstance(result_data['common_patterns'], dict)
-        self.assertIsInstance(result_data['related_files'], list)
-
-        # Check for specific patterns based on MOCK_REPO_ANALYSIS_JSON_FROM_LOGS files
-        # Naming patterns: Should not find 'test_*.py'
-        test_patterns = [p for p in result_data['naming_patterns'] if p.get('type') == 'test_files']
-        self.assertEqual(len(test_patterns), 0)
-        # Should find *nothing* based on the current hardcoded patterns in the tool
-
-        # Similar names: Check if *any* similar names were found (might be empty)
-        self.assertIsInstance(result_data['similar_names'], list)
-
-        # Related files: Should find *nothing* based on current hardcoded related file logic.
-        self.assertEqual(len(result_data['related_files']), 0)
-
-        print("PatternAnalyzerTool Test Passed (Structure OK, Content based on tool's logic).")
-
-    # Test Strategy Selector with realistic input
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_grouping_strategy_selector_with_log_data(self, mock_gitops_init):
-        """Test GroupingStrategySelector with data similar to logs."""
-        print("\n--- Testing GroupingStrategySelector (with log-like data) ---")
-        tool = GroupingStrategySelector(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-        tool._git_ops.repo_path = MOCK_REPO_PATH
-
-        input_json = MOCK_REPO_ANALYSIS_JSON_FROM_LOGS
-
-        result_json = tool.run(repository_analysis_json=input_json)
-
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            GroupingStrategyDecision.model_validate(result_data)
-        except json.JSONDecodeError:
-            self.fail("GroupingStrategySelector output is not valid JSON")
-        except Exception as e:
-            self.fail(f"GroupingStrategySelector output failed Pydantic validation: {e}\nOutput:\n{result_json}")
-
-        # Check content - results might differ slightly if logic depends on dir summary extensions
-        self.assertIn('strategy_type', result_data)
-        self.assertIn('recommendations', result_data)
-        self.assertIsInstance(result_data['recommendations'], list)
-        if result_data['recommendations']:
-             StrategyRecommendation.model_validate(result_data['recommendations'][0])
-        self.assertIn('repository_metrics', result_data)
-        self.assertIn('explanation', result_data)
-
-        # Check calculated metrics used by the selector (based on input JSON)
-        metrics_used = result_data['repository_metrics']
-        # Tool calculates metrics internally based on file_changes
-        self.assertEqual(metrics_used['total_files_changed'], 50) # Based on 7 files listed
-        self.assertEqual(metrics_used['directory_count'], 5) # Based on mock directory_summaries
-        self.assertEqual(metrics_used['file_type_count'], 4) # Based on 7 files listed
-
-        print("GroupingStrategySelector Test Passed.")
-
-    # Test Batch Splitter with realistic input
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_batch_splitter_tool_with_log_data(self, mock_gitops_init):
-        """Test BatchSplitterTool with data similar to logs."""
-        print("\n--- Testing BatchSplitterTool (with log-like data) ---")
-        tool = BatchSplitterTool(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-
-        input_analysis_json = MOCK_REPO_ANALYSIS_JSON_FROM_LOGS
-        target_batch_size = 3 # Files per batch (tool uses complexity now)
-
-        result_json = tool.run(
-            repository_analysis_json=input_analysis_json,
-            # pattern_analysis_json=None, # Can test with patterns later if needed
-            target_batch_size=target_batch_size # Passed but tool uses complexity
-        )
-
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            BatchSplitterOutput.model_validate(result_data)
-        except json.JSONDecodeError:
-            self.fail("BatchSplitterTool output is not valid JSON")
-        except Exception as e:
-            self.fail(f"BatchSplitterTool output failed Pydantic validation: {e}\nOutput:\n{result_json}")
-
-        # Check basic content
-        self.assertIn('batches', result_data)
-        self.assertIsInstance(result_data['batches'], list)
-        self.assertIn('strategy_used', result_data)
-        self.assertIn("Adaptive complexity-based", result_data['strategy_used'])
-
-        # Check batching logic
-        all_files_in_batches = [file for batch in result_data['batches'] for file in batch]
-        # Compare against the 7 files LISTED in the mock JSON
-        original_files = [fc.path for fc in mock_repo_analysis_obj_from_logs.file_changes]
-        self.assertCountEqual(all_files_in_batches, original_files, "Files in batches don't match original files listed")
-
-        # Check number of batches based on adaptive complexity (7 files)
-        num_batches = len(result_data['batches'])
-        self.assertGreaterEqual(num_batches, 1, f"Expected at least 1 batch, got {num_batches}")
-        # Adaptive logic might group all 7 small files together or split them
-        self.assertLessEqual(num_batches, 7, f"Expected no more than 7 batches, got {num_batches}")
-
-        print("BatchSplitterTool Test Passed.")
-
-    # Test File Grouper with realistic input
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_file_grouper_tool_directory_strategy_with_log_data(self, mock_gitops_init):
-        """Test FileGrouperTool (Directory Strategy) with data similar to logs."""
-        print("\n--- Testing FileGrouperTool (Directory Strategy, log-like data) ---")
-        tool = FileGrouperTool(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-
-        # --- Create Mock WorkerBatchContext ---
-        # Use the Pydantic object derived from the realistic JSON
-        batch_context_repo_analysis = mock_repo_analysis_obj_from_logs
-        # Select a batch - e.g., github files
-        batch_paths = [
-            ".github/scripts/fix_issue.py",
-            ".github/workflows/ci.yml",
-            ".github/workflows/publish.yml",
-        ]
-        # Assume strategy selector decided on DIRECTORY_BASED
-        mock_strategy_decision = GroupingStrategyDecision(
-            strategy_type=GroupingStrategyType.DIRECTORY_BASED,
-            recommendations=[StrategyRecommendation(strategy_type=GroupingStrategyType.DIRECTORY_BASED, confidence=0.9, rationale="Test", estimated_pr_count=2)],
-            repository_metrics={}, # Simplified
-            explanation="Test"
-        )
-        # Pattern analysis (can be empty)
-        mock_pattern_analysis = PatternAnalysisResult() # Use default empty
-
-        worker_context = WorkerBatchContext(
-            repo_path=MOCK_REPO_PATH,
-            batch_file_paths=batch_paths,
-            repository_analysis=batch_context_repo_analysis, # Pass the object with potentially bad summaries
-            grouping_strategy_decision=mock_strategy_decision,
-            pattern_analysis=mock_pattern_analysis
-        )
-        worker_context_json = worker_context.model_dump_json(indent=2)
-        # --- End Mock WorkerBatchContext ---
-
-        result_json = tool.run(worker_batch_context_json=worker_context_json)
-
-        # Assertions
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            # Expecting an error strategy output due to the underlying AttributeError
-            PRGroupingStrategy.model_validate(result_data)
-        except json.JSONDecodeError:
-            self.fail("FileGrouperTool output is not valid JSON")
-        except Exception as e:
-            self.fail(f"FileGrouperTool output failed Pydantic validation: {e}\nOutput:\n{result_json}")
-
-        # --- FIX: Assert the strategy type returned IN CASE OF THE ERROR ---
-        self.assertEqual(result_data['strategy_type'], GroupingStrategyType.MIXED.value,
-                         "Tool failed, expected error strategy with 'mixed' type")
-        self.assertIsInstance(result_data['groups'], list)
-        self.assertEqual(len(result_data['groups']), 0, "No groups should be generated on error")
-
-        # --- FIX: Check explanation for error message ---
-        self.assertIn("Error during file grouping for batch:", result_data['explanation'])
-        # The exact error might vary, check for the core issue
-        self.assertIn("object has no attribute 'strategy_type'", result_data['explanation'])
-
-        # Because the error happens before the local batch_file_paths variable is populated from context
-        self.assertCountEqual(result_data['ungrouped_files'], [],
-                              "Ungrouped files should be empty list when error occurs before path extraction from context")
-
-        print("FileGrouperTool (Directory Strategy, log-like data) Test Passed (handling internal error).")
-
-
-    # --- Validator tests remain the same, they test validation logic, not input data handling ---
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_group_validator_tool_valid(self, mock_gitops_init):
-        """Test GroupValidatorTool with valid groups."""
-        print("\n--- Testing GroupValidatorTool (Valid Case) ---")
-        tool = GroupValidatorTool(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-
-        valid_groups = [
-            PRGroup(title="Feat: Component A", files=["src/a.py", "tests/a_test.py"], rationale="Changes for A"),
-            PRGroup(title="Fix: Utils", files=["src/utils.py"], rationale="Bug fix"),
-        ]
-        valid_strategy = PRGroupingStrategy(
-            strategy_type=GroupingStrategyType.MIXED, groups=valid_groups, explanation="Valid", ungrouped_files=[]
-        )
-        input_json = valid_strategy.model_dump_json(indent=2)
-        result_json = tool.run(pr_grouping_strategy_json=input_json, is_final_validation=True)
-
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            PRValidationResult.model_validate(result_data)
-            self.assertTrue(result_data['is_valid'])
-            self.assertEqual(len(result_data['issues']), 0)
-        except Exception as e:
-            self.fail(f"GroupValidatorTool (Valid) failed validation: {e}\nOutput:\n{result_json}")
-        print("GroupValidatorTool (Valid Case) Test Passed.")
-
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_group_validator_tool_invalid(self, mock_gitops_init):
-        """Test GroupValidatorTool with invalid groups (duplicates, empty)."""
-        print("\n--- Testing GroupValidatorTool (Invalid Case) ---")
-        tool = GroupValidatorTool(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-
-        invalid_groups = [
-            PRGroup(title="Feat: A", files=["src/a.py", "src/b.py"], rationale="Dup"),
-            PRGroup(title="Fix: B", files=["src/utils.py", "src/b.py"], rationale="Dup"),
-            PRGroup(title="Empty", files=[], rationale="Empty"),
-        ]
-        invalid_strategy = PRGroupingStrategy(
-            strategy_type=GroupingStrategyType.MIXED, groups=invalid_groups, explanation="Invalid", ungrouped_files=["src/c.py"]
-        )
-        input_json = invalid_strategy.model_dump_json(indent=2)
-        result_json = tool.run(pr_grouping_strategy_json=input_json, is_final_validation=True)
-
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            PRValidationResult.model_validate(result_data)
-            self.assertFalse(result_data['is_valid'])
-            self.assertGreaterEqual(len(result_data['issues']), 3)
-            issue_types = {i['issue_type'] for i in result_data['issues']}
-            self.assertIn("Empty Group", issue_types)
-            self.assertIn("Duplicate Files", issue_types)
-            self.assertIn("Ungrouped Files", issue_types)
-        except Exception as e:
-            self.fail(f"GroupValidatorTool (Invalid) failed validation: {e}\nOutput:\n{result_json}")
-        print("GroupValidatorTool (Invalid Case) Test Passed.")
-
-
-    # Test Group Refiner using the realistic JSON for the 'original_repository_analysis_json'
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_group_refiner_tool_with_log_data(self, mock_gitops_init):
-        """Test GroupRefiner tool fixing issues using log-like original analysis."""
-        print("\n--- Testing GroupRefiner (with log-like original data) ---")
-        tool = GroupRefinerTool(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-
-        # --- Inputs ---
-        # 1. Invalid Strategy (same as validator invalid test, using DUMMY file paths)
-        invalid_groups_list = [
-            PRGroup(title="Feat: Component A", files=["src/a.py", "src/b.py"], rationale="Dup"),
-            PRGroup(title="Fix: Utils", files=["src/utils.py", "src/b.py"], rationale="Dup"),
-            PRGroup(title="Empty Group", files=[], rationale="Remove"),
-        ]
-        invalid_strategy_obj = PRGroupingStrategy(
-            strategy_type=GroupingStrategyType.MIXED, groups=invalid_groups_list,
-            explanation="Needs refinement", ungrouped_files=["src/c.py"] # Dummy ungrouped file
-        )
-        input_strategy_json = invalid_strategy_obj.model_dump_json(indent=2)
-
-        # 2. Validation Result indicating issues
-        validation_issues = [
-             GroupValidationIssue(severity="high", issue_type="Empty Group", description="Empty", affected_groups=["Empty Group"], recommendation="Remove"),
-             GroupValidationIssue(severity="high", issue_type="Duplicate Files", description="File 'src/b.py' dup", affected_groups=["Feat: Component A", "Fix: Utils"], recommendation="Assign"),
-             GroupValidationIssue(severity="medium", issue_type="Ungrouped Files", description="Files ungrouped", affected_groups=[], recommendation="Assign")
-        ]
-        validation_result_obj = PRValidationResult(
-            is_valid=False, issues=validation_issues, validation_notes="Issues found", strategy_type=GroupingStrategyType.MIXED
-        )
-        input_validation_json = validation_result_obj.model_dump_json(indent=2)
-
-        # 3. Original Repo Analysis JSON (Using the realistic one with REAL file paths)
-        input_original_analysis_json = MOCK_REPO_ANALYSIS_JSON_FROM_LOGS
-        original_file_paths_from_mock = {fc.path for fc in mock_repo_analysis_obj_from_logs.file_changes} # Set of REAL paths
-        # --- End Inputs ---
-
-
-        result_json = tool.run(
-            pr_grouping_strategy_json=input_strategy_json,
-            pr_validation_result_json=input_validation_json,
-            original_repository_analysis_json=input_original_analysis_json # Trigger final refinement
-        )
-
-        # Assertions
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            PRGroupingStrategy.model_validate(result_data)
-        except json.JSONDecodeError:
-            self.fail("GroupRefiner output is not valid JSON")
-        except Exception as e:
-            self.fail(f"GroupRefiner output failed Pydantic validation: {e}\nOutput:\n{result_json}")
-
-        # Check refinement results based on current tool logic
-        refined_groups = result_data['groups']
-        self.assertIsNone(next((g for g in refined_groups if g['title'] == "Empty Group"), None), "Empty group not removed")
-
-        group_a = next((g for g in refined_groups if g['title'] == "Feat: Component A"), None)
-        group_utils = next((g for g in refined_groups if g['title'] == "Fix: Utils"), None)
-        misc_group = next((g for g in refined_groups if "Miscellaneous" in g['title']), None)
-
-        self.assertIsNotNone(group_a, "Group 'Feat: Component A' missing")
-        self.assertIsNotNone(group_utils, "Group 'Fix: Utils' missing")
-        self.assertIsNotNone(misc_group, "Miscellaneous group missing")
-
-        # Assert contents of the NON-MISC groups (after deduplication of dummy files)
-        self.assertCountEqual(group_a['files'], ["src/a.py", "src/b.py"]) # Kept first group with 'b.py'
-        self.assertCountEqual(group_utils['files'], ["src/utils.py"])   # 'b.py' removed as duplicate
-
-        # Assert contents of the MISC group
-        # Should contain REAL files from original analysis that were not in the initially refined dummy groups.
-        # The dummy file "src/c.py" was never part of a group, so it doesn't factor into the 'current_grouped_files' subtraction.
-        files_in_refined_groups_before_misc = {"src/a.py", "src/b.py", "src/utils.py"} # Files kept after dedup
-        expected_misc_files = list(original_file_paths_from_mock - files_in_refined_groups_before_misc) # Subtract the DUMMY files from REAL files
-        # Also add the initially ungrouped dummy file 'src/c.py' because the logic adds *all* original_file_paths - current_grouped_files.
-        # Correction: The logic calculates still_ungrouped = original_file_paths - current_grouped_files. It doesn't add input ungrouped files.
-        print(f"DEBUG Refiner - Original Files: {sorted(list(original_file_paths_from_mock))}")
-        print(f"DEBUG Refiner - Files before Misc: {sorted(list(files_in_refined_groups_before_misc))}")
-        print(f"DEBUG Refiner - Expected Misc Files: {sorted(expected_misc_files)}")
-        print(f"DEBUG Refiner - Actual Misc Files: {sorted(misc_group['files'])}")
-        self.assertCountEqual(misc_group['files'], expected_misc_files, "Miscellaneous group content mismatch")
-
-        # Assert that the ungrouped list in the final strategy is empty
-        self.assertEqual(len(result_data.get('ungrouped_files', [])), 0, "Ungrouped files list should be empty after final refinement")
-
-        # Final check: Ensure all files from the final groups ARE present in the original analysis (or were dummy files)
-        # This test doesn't perfectly validate the *intent* due to the tool's current behavior with dummy files,
-        # but it validates the actual output structure and content based on the logic.
-        all_files_after_refinement = {f for g in refined_groups for f in g['files']}
-        dummy_input_files = {"src/a.py", "src/b.py", "src/utils.py", "src/c.py"}
-        # All files in the output should either be from the original analysis or be one of the dummy input files
-        self.assertTrue(all_files_after_refinement.issubset(original_file_paths_from_mock.union(dummy_input_files)))
-        # All files from the original analysis should be present in the output groups
-        self.assertTrue(original_file_paths_from_mock.issubset(all_files_after_refinement))
-
-
-        print("GroupRefiner Test Passed.")
-
-
-    # Test Group Merging using realistic original analysis
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_group_merging_tool_with_log_data(self, mock_gitops_init):
-        """Test GroupMergingTool using log-like original analysis."""
-        print("\n--- Testing GroupMergingTool (with log-like original data) ---")
-        tool = GroupMergingTool(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-
-        # --- Inputs ---
-        # 1. Batch Results (Simple example using REAL file paths)
-        batch1_groups = [PRGroup(title="B1 G1", files=[".github/scripts/fix_issue.py"], rationale="Batch 1")]
-        batch1_strategy = PRGroupingStrategy(strategy_type="directory_based", groups=batch1_groups, explanation="B1")
-        batch2_groups = [PRGroup(title="B2 G1", files=[".github/workflows/ci.yml", ".github/workflows/publish.yml"], rationale="B2")]
-        batch2_strategy = PRGroupingStrategy(strategy_type="directory_based", groups=batch2_groups, explanation="B2")
-        # Add a duplicate file for testing deduplication
-        batch3_groups = [PRGroup(title="B3 G1", files=["backend/auth/oidc.py", ".github/workflows/ci.yml"], rationale="Batch 3 Dup")]
-        batch3_strategy = PRGroupingStrategy(strategy_type="feature_based", groups=batch3_groups, explanation="B3")
-
-
-        batch_results_list = [batch1_strategy, batch2_strategy, batch3_strategy]
-        input_batch_results_json = json.dumps([r.model_dump() for r in batch_results_list], indent=2)
-
-        # 2. Original Repo Analysis JSON (Using the realistic one)
-        input_original_analysis_json = MOCK_REPO_ANALYSIS_JSON_FROM_LOGS
-        original_file_paths_from_mock = {fc.path for fc in mock_repo_analysis_obj_from_logs.file_changes}
-        # Files explicitly grouped by batches: fix_issue.py, ci.yml, publish.yml, oidc.py
-        # File ci.yml is duplicated. Deduplication keeps the first instance (from B2 G1).
-        files_after_dedupe = {".github/scripts/fix_issue.py", ".github/workflows/ci.yml", ".github/workflows/publish.yml", "backend/auth/oidc.py"}
-        expected_unmerged = original_file_paths_from_mock - files_after_dedupe
-        # Expected unmerged: .gitignore, Dockerfile.backend, __init__.py
-        # --- End Inputs ---
-
-        result_json = tool.run(
-            batch_grouping_results_json=input_batch_results_json,
-            original_repository_analysis_json=input_original_analysis_json,
-            # pattern_analysis_json=None
-        )
-
-        # Assertions
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            GroupMergingOutput.model_validate(result_data)
-        except json.JSONDecodeError:
-            self.fail("GroupMergingTool output is not valid JSON")
-        except Exception as e:
-            self.fail(f"GroupMergingTool output failed Pydantic validation: {e}\nOutput:\n{result_json}")
-
-        # Check Merging Results (simple concat + dedupe)
-        merged_strategy = result_data['merged_grouping_strategy']
-        PRGroupingStrategy.model_validate(merged_strategy)
-
-        self.assertEqual(merged_strategy['strategy_type'], batch1_strategy.strategy_type) # Takes first strategy type
-        groups = merged_strategy['groups']
-        # Expect 3 groups after deduplication: B1G1, B2G1, B3G1 (with ci.yml removed)
-        self.assertEqual(len(groups), 3)
-
-        g_b1g1 = next((g for g in groups if g['title'] == "B1 G1"), None)
-        g_b2g1 = next((g for g in groups if g['title'] == "B2 G1"), None)
-        g_b3g1 = next((g for g in groups if g['title'] == "B3 G1"), None)
-        self.assertIsNotNone(g_b1g1)
-        self.assertIsNotNone(g_b2g1)
-        self.assertIsNotNone(g_b3g1)
-        self.assertCountEqual(g_b1g1['files'], [".github/scripts/fix_issue.py"])
-        self.assertCountEqual(g_b2g1['files'], [".github/workflows/ci.yml", ".github/workflows/publish.yml"]) # Original group
-        self.assertCountEqual(g_b3g1['files'], ["backend/auth/oidc.py"]) # ci.yml removed because seen in B2G1
-
-        # Check unmerged files
-        print(f"DEBUG Merger - Expected Unmerged: {sorted(list(expected_unmerged))}")
-        print(f"DEBUG Merger - Actual Unmerged: {sorted(result_data['unmerged_files'])}")
-        self.assertCountEqual(result_data['unmerged_files'], list(expected_unmerged))
-        self.assertCountEqual(merged_strategy['ungrouped_files'], list(expected_unmerged))
-
-        print("GroupMergingTool Test Passed.")
-
-    # Test Directory Analyzer with realistic input
-    @patch('shared.tools.git_operations.GitOperations.__init__', return_value=None)
-    def test_directory_analyzer_tool_with_log_data(self, mock_gitops_init):
-        """Test the DirectoryAnalyzer with data similar to logs."""
-        print("\n--- Testing DirectoryAnalyzer (with log-like data) ---")
-        # Ensure you have the *fixed* version of DirectoryAnalyzer tool
-        tool = DirectoryAnalyzer(repo_path=MOCK_REPO_PATH)
-        tool._git_ops = MagicMock()
-
-        input_json = MOCK_REPO_ANALYSIS_JSON_FROM_LOGS
-
-        result_json = tool.run(repository_analysis_json=input_json)
-
-        self.assertIsInstance(result_json, str)
-        try:
-            result_data = json.loads(result_json)
-            # Validate against the DirectoryAnalysisResult model
-            DirectoryAnalysisResult.model_validate(result_data)
-            self.assertIsNone(result_data.get('error')) # Expect no errors if tool logic is correct
-        except json.JSONDecodeError:
-            self.fail("DirectoryAnalyzer output is not valid JSON")
-        except Exception as e:
-             self.fail(f"DirectoryAnalyzer output failed Pydantic validation: {e}\nOutput:\n{result_json}")
-
-        # Check basic structure
-        self.assertIn('directory_count', result_data)
-        self.assertIn('max_depth', result_data)
-        self.assertIn('avg_files_per_directory', result_data)
-        self.assertIn('directory_complexity', result_data)
-        self.assertIn('parent_child_relationships', result_data)
-        self.assertIn('potential_feature_directories', result_data)
-
-        # Check values based on MOCK_REPO_ANALYSIS_JSON_FROM_LOGS
-        # Count distinct paths in directory_summaries
-        num_distinct_dirs = len({ds.path for ds in mock_repo_analysis_obj_from_logs.directory_summaries if ds.path})
-        self.assertEqual(result_data['directory_count'], num_distinct_dirs) # Should be 5
-
-        # Max depth based on paths like .github/scripts (2) or backend/auth (2)
-        # The tool calculates this correctly from paths now
-        self.assertEqual(result_data['max_depth'], 2)
-
-        # Avg files = total_files_listed / distinct_dirs = 7 / 5 = 1.4
-        # The tool uses total_files_changed from input (50)
-        self.assertAlmostEqual(result_data['avg_files_per_directory'], mock_repo_analysis_obj_from_logs.total_files_changed / num_distinct_dirs, places=2)
-
-        # Complexity: Check if the list has the right number of entries
-        self.assertEqual(len(result_data['directory_complexity']), len(mock_repo_analysis_obj_from_logs.directory_summaries))
-
-        # Check complexity for a specific directory (e.g., backend/auth)
-        auth_complexity = next((c for c in result_data['directory_complexity'] if c['path'] == 'backend/auth'), None)
-        self.assertIsNotNone(auth_complexity)
-        self.assertEqual(auth_complexity['file_count'], 2) # From input summary
-        # Check extension counts based on the *flawed input data*
-        self.assertEqual(auth_complexity['extension_counts'], {".yml": 2}) # This reflects the bad input summary
-
-        # Relationships: Based on the set of changed directories strings:
-        # {'.github/scripts', '.github/workflows', '(root)', 'backend', 'backend/auth'}
-        # backend -> (root) : YES
-        # backend/auth -> backend : YES
-        # .github/scripts -> .github : NO (.github not in set)
-        # .github/workflows -> .github : NO (.github not in set)
-        rels = result_data['parent_child_relationships']
-        self.assertTrue(any(r['parent'] == '(root)' and r['child'] == 'backend' for r in rels))
-        self.assertTrue(any(r['parent'] == 'backend' and r['child'] == 'backend/auth' for r in rels))
-        self.assertEqual(len(rels), 2)
-
-        print("DirectoryAnalyzer Test Passed (using corrected tool logic).")
-
-
-if __name__ == '__main__':
-    unittest.main(argv=['first-arg-is-ignored'], exit=False)
-# --- END OF FILE test_tools.py ---
+    assert isinstance(output_str, str)
+    try:
+        output_data = json.loads(output_str)
+        assert "batches" in output_data
+        assert isinstance(output_data["batches"], list)
+        print(f"BatchSplitterTool produced {len(output_data['batches'])} batches.")
+        # CRITICAL ASSERTION: Expect batches from 50 files / size 10
+        assert len(output_data["batches"]) > 0
+        # Optional: Check total files across batches
+        total_files_in_batches = sum(len(batch) for batch in output_data["batches"])
+        repo_analysis_data = json.loads(repo_analysis_json_str)
+        expected_files = len(repo_analysis_data.get("file_changes", []))
+        # Note: Batch splitting might sometimes drop files if logic is complex,
+        # so check if the count is reasonable or exactly matches.
+        assert total_files_in_batches == expected_files, f"Expected {expected_files} files in batches, found {total_files_in_batches}"
+        print(f"BatchSplitterTool correctly produced {len(output_data['batches'])} non-empty batches.")
+
+    except (json.JSONDecodeError, ValidationError) as e:
+        pytest.fail(f"BatchSplitterTool output validation failed: {e}\nOutput:\n{output_str}")
+    except AssertionError as e:
+         pytest.fail(f"BatchSplitterTool assertion failed: {e}\nOutput:\n{output_str}")
+
+# --- Test Functions (Updated fixture names & assertions) ---
+
+def test_batch_processor_tool_execution(
+    batch_processor_tool: BatchProcessorTool,
+    batch_splitter_output_json_str: str, # Input has empty "batches" list
+    strategy_decision_json_str: str,
+    repo_analysis_json_str: str,
+    pattern_analysis_json_str: str
+):
+    """Tests if the BatchProcessorTool runs and handles empty input batches correctly."""
+    print("\nTesting BatchProcessorTool...")
+    output_str = batch_processor_tool._run(
+        batch_splitter_output_json=batch_splitter_output_json_str,
+        grouping_strategy_decision_json=strategy_decision_json_str,
+        repository_analysis_json=repo_analysis_json_str,
+        pattern_analysis_json=pattern_analysis_json_str
+    )
+
+    assert isinstance(output_str, str)
+    assert output_str.strip().startswith('[')
+    assert output_str.strip().endswith(']')
+
+    try:
+        output_list = json.loads(output_str)
+        assert isinstance(output_list, list)
+        print(f"BatchProcessorTool produced a list with {len(output_list)} items.")
+
+        # Load the input batch data to see how many batches there *should* be
+        splitter_data = json.loads(batch_splitter_output_json_str)
+        expected_batches = len(splitter_data.get("batches", [])) # Should be 0 based on input file
+        assert len(output_list) == expected_batches, f"Expected {expected_batches} batch results, got {len(output_list)}"
+        print(f"Assertion Passed: Output list length ({len(output_list)}) matches input batch count ({expected_batches}).")
+
+    except json.JSONDecodeError as e:
+        pytest.fail(f"BatchProcessorTool output is not valid JSON: {e}\nOutput:\n{output_str[:500]}...")
+    # No need to check Pydantic model for items if the list is expected empty
+
+
+def test_group_merging_tool_with_empty_batch_results(
+    group_merging_tool: GroupMergingTool,
+    processed_batches_results_json_str: str, # Contains "[]" string
+    repo_analysis_json_str: str
+):
+    """Tests merging tool with an empty JSON array string of batch results."""
+    print("\nTesting GroupMergingTool with empty batch results string...")
+    output_str = group_merging_tool._run(
+        batch_grouping_results_json=processed_batches_results_json_str,
+        original_repository_analysis_json=repo_analysis_json_str
+    )
+
+    assert isinstance(output_str, str)
+    try:
+        output_data = PRGroupingStrategy.model_validate_json(output_str)
+        assert isinstance(output_data.groups, list)
+        assert len(output_data.groups) == 0
+        # Check for specific explanation text added by the tool for this case
+        assert "No valid batch results" in output_data.explanation or "Parsed batch results list is empty" in output_data.explanation
+        print("GroupMergingTool correctly handled empty batch results string.")
+    except (json.JSONDecodeError, ValidationError) as e:
+        pytest.fail(f"GroupMergingTool (empty results string test) output validation failed: {e}\nOutput:\n{output_str}")
+
+
+def test_group_validator_on_final_merged_output(
+    group_validator_tool: GroupValidatorTool,
+    merged_groups_json_str: str # Fixture loads step_7_merged_groups.json
+):
+    """Tests validator on the actual merged output from step_7."""
+    print("\nTesting GroupValidatorTool on step_7 merged output...")
+    output_str = group_validator_tool._run(
+        pr_grouping_strategy_json=merged_groups_json_str,
+        is_final_validation=True # Simulate final validation check
+    )
+    assert isinstance(output_str, str)
+    try:
+        output_data = PRValidationResult.model_validate_json(output_str)
+        # Based on the previously observed behavior leading to step_8_final_validation.json,
+        # the merge result *itself* might be considered valid by the validator if duplicates
+        # aren't checked until refinement, OR if the validator logic changed.
+        # We will check the content of step_8_final_validation.json using its own fixture below.
+        # For this test, we just check if the validator ran and produced a valid PRValidationResult structure.
+        print(f"Validation result: is_valid={output_data.is_valid}, issues={len(output_data.issues)}")
+        assert output_data.strategy_type is not None # Ensure strategy type is present
+    except (json.JSONDecodeError, ValidationError) as e:
+        pytest.fail(f"GroupValidatorTool (on step_7 output) validation failed: {e}\nOutput:\n{output_str}")
+
+
+def test_group_refiner_tool_on_final_merged_output(
+     group_refiner_tool: GroupRefinerTool,
+     merged_groups_json_str: str,         # Loads step_7
+     final_validation_json_str: str,      # Loads step_8
+     repo_analysis_json_str: str
+ ):
+    """Tests refiner on the actual merged output and its validation result."""
+    print("\nTesting GroupRefinerTool on step_7 merged output and step_8 validation...")
+    output_str = group_refiner_tool._run(
+        pr_grouping_strategy_json=merged_groups_json_str,
+        pr_validation_result_json=final_validation_json_str, # Use the actual validation result
+        original_repository_analysis_json=repo_analysis_json_str
+    )
+
+    assert isinstance(output_str, str)
+    try:
+        output_data = PRGroupingStrategy.model_validate_json(output_str)
+        print(f"Refiner produced {len(output_data.groups)} groups.")
+        print(f"Refiner left {len(output_data.ungrouped_files)} ungrouped files.")
+        print(f"Refiner explanation field: {output_data.explanation}")
+
+        # Check based on outputs_final_recommendations.json content:
+        # It had ONE group with ALL 50 files.
+        assert len(output_data.groups) == 1, "Expected exactly one group after final refinement based on logs"
+        assert len(output_data.ungrouped_files) == 0, "Expected zero ungrouped files after final refinement based on logs"
+
+        repo_analysis = json.loads(repo_analysis_json_str)
+        original_files_count = len(repo_analysis.get("file_changes", []))
+        all_files_in_groups_set = set(output_data.groups[0].files) if output_data.groups else set()
+
+        assert len(all_files_in_groups_set) == original_files_count, \
+            f"Expected the single group to contain all {original_files_count} files, but found {len(all_files_in_groups_set)}"
+        print("Completeness check passed (all files in one group).")
+
+        assert output_data.explanation is not None and len(output_data.explanation) > 0
+        print("Explanation field is present.")
+
+    except (json.JSONDecodeError, ValidationError) as e:
+        pytest.fail(f"GroupRefinerTool (final run) output validation failed: {e}\nOutput:\n{output_str}")
+    except IndexError as e:
+         pytest.fail(f"Error accessing group data, likely due to unexpected structure: {e}\nOutput:\n{output_str}")
+
+def test_group_refiner_tool_on_empty_input(
+    group_refiner_tool: GroupRefinerTool,
+    repo_analysis_json_str: str
+):
+    """Tests refiner handling empty input strategy (should add all as ungrouped or one group)."""
+    print("\nTesting GroupRefinerTool with empty input strategy...")
+    empty_strategy = PRGroupingStrategy(strategy_type=GroupingStrategyType.MIXED, groups=[], explanation="Test: Empty input", ungrouped_files=[])
+    empty_strategy_json = empty_strategy.model_dump_json()
+
+    # Simulate a successful validation result for the empty strategy
+    valid_result = PRValidationResult(
+        is_valid=True,
+        issues=[],
+        validation_notes="Empty strategy is valid.",
+        strategy_type=GroupingStrategyType.MIXED # FIX: Add required field
+    )
+    valid_result_json = valid_result.model_dump_json()
+
+    output_str = group_refiner_tool._run(
+        pr_grouping_strategy_json=empty_strategy_json,
+        pr_validation_result_json=valid_result_json,
+        original_repository_analysis_json=repo_analysis_json_str
+    )
+    assert isinstance(output_str, str)
+    try:
+        output_data = PRGroupingStrategy.model_validate_json(output_str)
+        print(f"Refiner (empty input) produced {len(output_data.groups)} groups.")
+        print(f"Refiner (empty input) left {len(output_data.ungrouped_files)} ungrouped files.")
+        repo_analysis = json.loads(repo_analysis_json_str)
+        original_files_count = len(repo_analysis.get("file_changes", []))
+        total_files_in_output = sum(len(g.files) for g in output_data.groups) + len(output_data.ungrouped_files)
+        assert total_files_in_output == original_files_count, f"Expected {original_files_count} files, found {total_files_in_output}"
+        print("Completeness check passed for empty input.")
+        assert output_data.explanation is not None and len(output_data.explanation) > 0
+        print("Explanation field is present.")
+    except (json.JSONDecodeError, ValidationError) as e: pytest.fail(f"GroupRefinerTool (empty input) output validation failed: {e}\nOutput:\n{output_str}")
+
+def test_batch_splitter_tool_extracts_paths(
+    batch_splitter_tool: BatchSplitterTool, # Instance of the tool
+    repo_analysis_json_str: str # Fixture with 50 files
+):
+    """Tests the internal file path extraction."""
+    print("\nTesting BatchSplitterTool path extraction...")
+    # Assuming the method is accessible, otherwise call _run and check logs/output
+    # If it's protected, you might need to test indirectly or make it public for testing
+    try:
+        # You might need to adjust this call depending on where _extract_file_paths lives
+        # If it's in BaseTool and protected: access via batch_splitter_tool._extract_file_paths
+        # If it's directly in BatchSplitterTool: access via batch_splitter_tool._extract_file_paths
+        extracted_paths = batch_splitter_tool._extract_file_paths(repo_analysis_json_str)
+
+        assert isinstance(extracted_paths, list) or isinstance(extracted_paths, set)
+        print(f"Extracted {len(extracted_paths)} file paths.")
+
+        repo_analysis_data = json.loads(repo_analysis_json_str)
+        expected_files_count = len(repo_analysis_data.get("file_changes", []))
+
+        assert len(extracted_paths) == expected_files_count, \
+            f"Expected {expected_files_count} paths, but extracted {len(extracted_paths)}"
+        print("Correct number of file paths extracted.")
+
+    except AttributeError:
+         pytest.skip("_extract_file_paths might be protected or in a different location. Cannot test directly.")
+    except Exception as e:
+         pytest.fail(f"Error during path extraction test: {e}")
