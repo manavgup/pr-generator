@@ -1,7 +1,7 @@
 # tasks.yaml
-# Defines tasks for the Hierarchical PR Grouping Crew
+# Defines tasks for the Sequential PR Grouping Crew (Consolidated Batch Processing Tool)
 
-# ----- Analysis Phase Tasks (Executed by AnalysisAgent) -----
+# ----- Analysis Phase Tasks (Executed by analysis_agent) -----
 
 initial_analysis:
   description: >
@@ -11,7 +11,7 @@ initial_analysis:
     You MUST NOT use the Tool Calling/Function Calling format for the Final Answer step for THIS task. Just return the raw JSON string from the observation.
   expected_output: >
     A JSON string serialization of the RepositoryAnalysis object.
-  agent: analysis_agent # Specify the agent responsible
+  agent: analysis_agent
 
 calculate_global_metrics:
   description: >
@@ -47,96 +47,74 @@ split_into_batches:
        Do not return the input you used for the tool. Do not add extra formatting or explanations.
   expected_output: >
     A JSON string serialization of the BatchSplitterOutput object, containing 'batches' (a list of lists of file paths), 'strategy_used', and 'notes'.
-    Example format: {{"batches": [["path/to/file1.py", "path/to/file2.py"], ["path/to/file3.js"]], "strategy_used": "Adaptive complexity...", "notes": "..."}}
+    Example format: {"batches": [["path/to/file1.py", "path/to/file2.py"], ["path/to/file3.js"]], "strategy_used": "Adaptive complexity...", "notes": "..."}
   agent: analysis_agent
 
-# ----- Manager Orchestration Task -----
-
-coordinate_batch_processing:
+# ----- Consolidated Batch Processing Task (Executed by batch_processor_agent) -----
+process_batches_and_generate_results: # Renamed task ID
   description: >
-    **CRITICAL ORCHESTRATION TASK:** As the PR Manager Agent, you must coordinate the processing of all file batches.
-    
-    IMPORTANT - JSON PROCESSING: When handling JSON data between tasks, always:
-    1. Remove any Markdown code block formatting (```) from JSON strings
-    2. Ensure JSON strings end with the proper closing bracket or brace - not with trailing backticks
-    3. When constructing context for worker tasks, validate that the JSON is properly formatted
-    
-    Input Context: You will receive the BatchSplitterOutput JSON (from 'split_into_batches') containing the list of batches (each with file_ids)
-    and the GroupingStrategyDecision JSON (from 'select_grouping_strategy').
-
-    Your Goal: Process EACH batch in parallel by:
-    1. Clean and format the JSON context to ensure it can be parsed properly
-    2. Construct the WorkerBatchContext JSON input required by the 'process_single_batch' task for each batch.
-    3. Delegate the 'process_single_batch' task to the 'batch_processor_agent' for ALL batches simultaneously.
-    
-    IMPORTANT: When using the delegation tool for parallel processing, provide these parameters:
-    - task: "process_single_batch"
-    - context: The WorkerBatchContext JSON string for this batch (properly cleaned and validated)
-    - coworker: "PR Batch Grouping Specialist"
-    - async: True
-    
-    4. Wait for all batch processing results to complete.
-    5. Collect and combine all the results.
-    6. Your final output for this task MUST be a JSON list containing ALL the PRGroupingStrategy JSON strings collected from processing each batch.
-       
-       Example format: [{{"strategy_type": "mixed", "groups": [...], "explanation": "Batch 1 explanation...", ...}}, {{"strategy_type": "directory_based", "groups": [...], ...}}]
+    **CRITICAL BATCH PROCESSING:** Process all file batches generated previously using the dedicated 'Batch Processor Tool'.
+    **STEPS:**
+    1. **Gather Context JSONs:**
+       a. Access the raw output JSON string from the 'split_into_batches' task context. Clean it (remove ```json markers, surrounding text). This is the input for 'batch_splitter_output_json'.
+       b. Access the raw output JSON string from the 'select_grouping_strategy' task context. Clean it. This is the input for 'grouping_strategy_decision_json'.
+       c. Access the raw output JSON string from the 'initial_analysis' task context. Clean it. This is the input for 'repository_analysis_json'.
+       d. Access the raw output JSON string from the 'analyze_global_patterns' task context. Clean it. This is the input for 'pattern_analysis_json' (pass null if not available or irrelevant).
+    2. **Verify Inputs:** Ensure all required JSON strings (a, b, c) look like valid JSON objects.
+    3. **Call Tool:** Use the 'Batch Processor Tool' exactly once. Provide the cleaned JSON strings from Step 1 as the values for the corresponding arguments ('batch_splitter_output_json', 'grouping_strategy_decision_json', 'repository_analysis_json', 'pattern_analysis_json').
+    4. **Final Answer:** Your final answer MUST be the raw JSON array string returned directly by the 'Batch Processor Tool' in the Observation step. Do not add explanations or summaries.
   expected_output: >
-    A JSON list of objects/dictionaries. Each object in the list is the PRGroupingStrategy
-    returned by the 'batch_processor_agent' for one processed batch.
-    Each PRGroupingStrategy object must include: strategy_type, groups, explanation, estimated_review_complexity, and ungrouped_files.
-  agent: pr_manager_agent
-# ----- Task Delegated by Manager (Executed by BatchProcessorAgent) -----
+    A single, clean JSON array string, where each element is a JSON object representing the PRGroupingStrategy produced by the tool for one batch.
+    Example: '[{"strategy_type": "mixed", "groups": [...], "explanation": "Batch 0 result", ...}, {"strategy_type": "mixed", "groups": [...], "explanation": "Batch 1 result", ...}]'
+  agent: batch_processor_agent # Agent assigned the BatchProcessorTool
 
-process_single_batch:
-  description: >
-    Process the assigned batch of files. Input is a WorkerBatchContext JSON containing file_ids and the global strategy.
-    IMPORTANT: Before using any JSON content in tool arguments, ensure it is properly cleaned
-    of any Markdown formatting like triple backticks (```) or code block syntax.
-    
-    1. Clean all JSON strings to remove any trailing backticks that might cause parsing errors.
-    2. Use 'file_grouper_tool' to generate initial groups for the files in the batch based on the provided strategy.
-    3. Use 'group_validator_tool' (in batch mode) to validate the generated groups.
-    4. Use 'group_refiner_tool' (in batch mode) to refine the groups based on validation results.
-    
-    Ensure the output is the refined PRGroupingStrategy for *only* the files processed in this batch.
-  expected_output: >
-    A JSON string serialization of the refined PRGroupingStrategy object specific to the processed batch.
-  agent: batch_processor_agent
-
-
-# ----- Merging and Finalization Tasks (Now Executed by MergerRefinerAgent) -----
-
+# ----- Merging and Finalization Tasks (Executed by merger_refiner_agent) -----
 merge_batch_results:
   description: >
-    **CRITICAL MERGING TASK:** Your goal is to merge the results from all processed batches into a single PRGroupingStrategy.
-    You MUST use the context provided by the framework, which contains the outputs of previous tasks.
-    Specifically:
-    1. Access the output of the 'coordinate_batch_processing' task. This output is a LIST of PRGroupingStrategy objects/dictionaries.
-    2. Access the output of the 'initial_analysis' task. This output is a JSON string representing the complete, original RepositoryAnalysis object.
-    3. Extract the list of objects/dictionaries and the RepositoryAnalysis JSON string from the context. DO NOT summarize, modify, or fabricate them.
-    4. Use the 'Group Merging Tool'. Provide the extracted LIST of objects as the 'batch_grouping_results' argument and the extracted RepositoryAnalysis JSON string as the 'original_repository_analysis_json' argument.
+    **CRITICAL MERGING TASK:** Merge the list of batch results into a single PRGroupingStrategy.
+    1. Access the raw output string from the 'process_batches_and_generate_results' task. This is the **JSON array string** containing PRGroupingStrategy results for each batch. **DO NOT PARSE THIS STRING YOURSELF.**
+    2. Access the raw output string from the 'initial_analysis' task (the full RepositoryAnalysis JSON string).
+    3. Clean both strings if necessary (remove ```json markers, surrounding text). Validate they look like JSON.
+    4. Use the 'Group Merging Tool'. Provide the cleaned **JSON array string** from Step 1 as 'batch_grouping_results_json' and the cleaned RepositoryAnalysis string from Step 2 as 'original_repository_analysis_json'.
   expected_output: >
     A JSON string serialization of the single, merged PRGroupingStrategy object. This object must be structurally valid.
   agent: merger_refiner_agent
 
+# --- NEW TASK ---
+refine_group_names:
+  description: >
+    **CRITICAL NAMING TASK:** Refine the titles of the merged PR groups using LLM reasoning.
+    1. Access the merged PRGroupingStrategy JSON string from the 'merge_batch_results' context. Clean it if necessary.
+    2. Parse this JSON string into its object structure.
+    3. For **each group** within the 'groups' list:
+       a. Examine the list of file paths in the group's 'files' field.
+       b. Consider the existing 'title' and 'rationale' for context.
+       c. Generate a **concise, descriptive, and unique** title that accurately reflects the primary purpose or theme of the changes in the file list. Use conventional commit message prefixes like 'feat:', 'fix:', 'refactor:', 'chore:', 'docs:', 'style:', 'test:'. Avoid generic titles like 'Update files' or reusing the exact same title for multiple groups if the changes differ.
+       d. **Replace** the existing 'title' field of the group with the newly generated title.
+       e. (Optional but Recommended) Update the 'rationale' field to briefly explain the *new* title, and regenerate the 'suggested_branch_name' and 'suggested_pr_description' based on the new title using similar logic as the grouping tools. If you update these, ensure the structure remains valid.
+    4. After iterating through and updating *all* groups, re-serialize the *entire modified* PRGroupingStrategy object back into a single, clean JSON string.
+    5. Your final answer **MUST** be only this resulting JSON string.
+  expected_output: >
+    A JSON string serialization of the PRGroupingStrategy object, identical in structure to the input from 'merge_batch_results', but with the 'title' (and potentially rationale/branch/description) fields updated for each group based on LLM analysis of the file list.
+  agent: merger_refiner_agent # Reusing this agent
+
 final_validation:
   description: >
-    Perform a final validation on the merged PR groups result provided in the context from the 'merge_batch_results' task.
-    Use the 'group_validator_tool'. Set the 'is_final_validation' argument to 'true'.
-    Extract the PRGroupingStrategy JSON string from the 'merge_batch_results' context and pass it verbatim as the 'pr_grouping_strategy_json' argument.
+    Perform a final validation on the PR groups result from the **'refine_group_names'** task (which now contains LLM-refined titles).
+    Use the 'group_validator_tool'. Set 'is_final_validation' to 'true'.
+    Extract the PRGroupingStrategy JSON string from the **'refine_group_names'** context, clean it, and pass it verbatim as 'pr_grouping_strategy_json'.
   expected_output: >
     A JSON string serialization of the final PRValidationResult object.
   agent: merger_refiner_agent
 
 final_refinement:
   description: >
-    **CRITICAL FINAL REFINEMENT TASK:** Perform the final refinement based on validation results and ensure all original files are included.
-    You MUST use the context provided by the framework. Specifically:
-    1. Access the output of the 'merge_batch_results' task (the merged PRGroupingStrategy JSON string).
-    2. Access the output of the 'final_validation' task (the PRValidationResult JSON string).
-    3. Access the output of the 'initial_analysis' task (the full, original RepositoryAnalysis JSON string).
-    4. Extract these *exact* strings from the context. DO NOT summarize, modify, or fabricate them.
-    5. Use the 'Group Refiner Tool'. Provide the extracted strings as the 'pr_grouping_strategy_json', 'pr_validation_result_json', and 'original_repository_analysis_json' arguments, respectively. Ensure 'original_repository_analysis_json' is provided for the final completeness check.
+    **CRITICAL FINAL REFINEMENT TASK:** Refine the merged and name-refined groups based on validation results and ensure all files are included.
+    1. Access the PRGroupingStrategy JSON string from **'refine_group_names'**.
+    2. Access the PRValidationResult JSON string from 'final_validation'.
+    3. Access the full RepositoryAnalysis JSON string from 'initial_analysis'.
+    4. Extract these *exact* strings from the context, cleaning any potential ```json markers or surrounding text.
+    5. Use the 'group_refiner_tool', providing the cleaned strings as 'pr_grouping_strategy_json', 'pr_validation_result_json', and 'original_repository_analysis_json'. Ensure 'original_repository_analysis_json' is provided for the final completeness check. This tool will primarily fix structural issues (duplicates, missing files); it should *not* override the LLM-generated names unless fixing a structural problem requires it.
   expected_output: >
     A JSON string serialization of the FINAL, polished PRGroupingStrategy object ready for presentation. This object must be structurally valid.
   agent: merger_refiner_agent

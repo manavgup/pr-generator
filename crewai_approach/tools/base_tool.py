@@ -169,22 +169,25 @@ class BaseRepoTool(BaseTool, ABC):
     
     def _extract_file_paths(self, repository_analysis_json: str) -> List[str]:
         """
-        Extract just file paths from repository analysis JSON.
-        
-        Args:
-            repository_analysis_json: JSON string of RepositoryAnalysis
-            
-        Returns:
-            List of file paths
+        Extract file paths from repository analysis JSON, handling double-escaped JSON.
         """
         try:
-            data = self._safe_deserialize(repository_analysis_json)
+            # Clean the input
+            repository_analysis_json = self._clean_json_string(repository_analysis_json)
             
-            # Try to find file paths directly in the data
-            if "file_paths" in data and isinstance(data["file_paths"], list):
-                return data["file_paths"]
-                
-            # Try to extract from file_changes 
+            # Try to parse it as JSON
+            data = json.loads(repository_analysis_json)
+            
+            # Check if this is already a parsed object or still a string that needs parsing
+            if isinstance(data, str):
+                # This is a string that needs to be parsed again (double-escaped JSON)
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    # If it can't be parsed again, use it as is
+                    pass
+            
+            # Now extract file paths
             file_paths = []
             if "file_changes" in data and isinstance(data["file_changes"], list):
                 for file_change in data["file_changes"]:
@@ -193,6 +196,7 @@ class BaseRepoTool(BaseTool, ABC):
                         if path and isinstance(path, str):
                             file_paths.append(path)
             
+            logger.info(f"Extracted {len(file_paths)} file paths from repository analysis")
             return file_paths
         except Exception as e:
             logger.error(f"Error extracting file paths: {e}")

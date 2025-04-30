@@ -4,11 +4,10 @@ import os
 import sys
 import argparse
 from pathlib import Path # Use pathlib
-import agentops
 
 # Assume configure_logging expects a 'verbose' boolean argument
 from shared.utils.logging_utils import configure_logging, get_logger
-from .crew import HierarchicalPRCrew
+from .crew import SequentialPRCrew
 
 logger = get_logger(__name__)
 
@@ -23,7 +22,6 @@ def main():
     parser.add_argument('--verbose', '-v', action='count', default=0, help='Increase verbosity level (e.g., -v, -vv)')
     parser.add_argument("--manager-llm", default="gpt-4o", help="LLM model to use for the manager agent/process.")
     args = parser.parse_args()
-    agentops.init()
 
     # --- FIX IS HERE ---
     # Determine if verbose logging is enabled based on the count
@@ -66,13 +64,13 @@ def main():
             logger.info(f"Setting max_files={args.max_files} in inputs")
 
         # Instantiate the crew with parsed arguments
-        crew_instance = HierarchicalPRCrew(
+        crew_instance = SequentialPRCrew(
             repo_path=str(repo_path),
             max_files=args.max_files,
             max_batch_size=args.max_batch_size,
-            verbose=crew_verbose_level, # Pass the 0, 1, 2 level to crew
+            verbose=crew_verbose_level,
             output_dir=str(output_dir),
-            manager_llm_name=args.manager_llm # Pass manager LLM name
+            manager_llm_name=args.manager_llm
         )
 
         logger.info("Starting Hierarchical PR Recommendation Crew (Hierarchical Process)...")

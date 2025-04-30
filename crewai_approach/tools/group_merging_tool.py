@@ -1,225 +1,159 @@
-"""
-Group merging tool for merging PR grouping results from multiple batches.
-"""
+# tools/group_merging_tool.py
 import json
 import re
 from typing import Type, List, Dict, Set, Optional, Any
 
-# Assuming pydantic models are defined
 from pydantic import BaseModel, Field, ValidationError
 
 from .base_tool import BaseRepoTool
-# Import specific models including the Enum from agent_models
 from models.agent_models import PRGroupingStrategy, PRGroup, GroupingStrategyType
-from models.batching_models import GroupMergingOutput
 from shared.utils.logging_utils import get_logger
+from shared.models.analysis_models import RepositoryAnalysis, FileChange
 
 logger = get_logger(__name__)
 
+# --- REVERTED SCHEMA ---
 class GroupMergingToolSchema(BaseModel):
     """Input schema for GroupMergingTool using primitive types."""
-    batch_grouping_results_json: List[str] = Field(..., description="A list of JSON strings representing PRGroupingStrategy objects from batches.")
-    original_repository_analysis_json: str = Field(..., description="JSON string of the original, full RepositoryAnalysis object.")
-    pattern_analysis_json: Optional[str] = Field(None, description="JSON string of the global PatternAnalysisResult object (optional).")
-
+    # Expect a JSON *string* representing a list of batch result strings/objects
+    batch_grouping_results_json: str = Field(..., description="REQUIRED: A JSON array *string*, where each element is the JSON serialization of a PRGroupingStrategy object from one batch.")
+    original_repository_analysis_json: str = Field(..., description="REQUIRED: JSON string of the original, full RepositoryAnalysis object.")
 
 class GroupMergingTool(BaseRepoTool):
     name: str = "Group Merging Tool"
-    description: str = "Merges PR grouping results from multiple batches into a single, coherent set of PR groups."
+    description: str = "Merges PR grouping results (provided as a JSON array string) from multiple batches into a single, coherent PRGroupingStrategy JSON string."
     args_schema: Type[BaseModel] = GroupMergingToolSchema
+
+    # --- Helper to clean potential markdown/whitespace ---
+    def _clean_json_string(self, json_string: Optional[str]) -> Optional[str]:
+         if not json_string or not isinstance(json_string, str):
+             return None
+         try:
+             cleaned = re.sub(r'^```json\s*', '', json_string.strip(), flags=re.MULTILINE)
+             cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.MULTILINE).strip()
+             # Only return if it looks like JSON, let the main parser handle validation
+             if cleaned.startswith('{') or cleaned.startswith('['):
+                  return cleaned
+             else: return None
+         except: return None
+
+    def _extract_file_paths(self, repo_analysis_json: Optional[str]) -> Set[str]:
+         if not repo_analysis_json: return set()
+         try:
+             repo_analysis = RepositoryAnalysis.model_validate_json(repo_analysis_json)
+             if repo_analysis.file_changes:
+                 return {fc.path for fc in repo_analysis.file_changes if fc.path}
+         except (ValidationError, json.JSONDecodeError) as e:
+             logger.warning(f"Could not extract file paths from repo analysis JSON: {e}")
+         return set()
 
     def _run(
         self,
-        batch_grouping_results_json: List[str],
+        batch_grouping_results_json: str, # Expects JSON string of list
         original_repository_analysis_json: str,
-        pattern_analysis_json: Optional[str] = None
     ) -> str:
-        """Merges batch grouping results."""
-        # Echo received inputs for debugging
-        logger.info(f"GroupMergingTool received {len(batch_grouping_results_json)} batch_grouping_results_json items")
+        """Merges batch grouping results (provided as a JSON array string)."""
+        logger.info(f"GroupMergingTool received batch_grouping_results_json: {batch_grouping_results_json[:150]}...")
         logger.info(f"GroupMergingTool received original_repository_analysis_json: {original_repository_analysis_json[:100]}...")
-        if pattern_analysis_json:
-            logger.info(f"GroupMergingTool received pattern_analysis_json: {pattern_analysis_json[:100]}...")
-        
-        try:
-            # --- Validate Inputs ---
-            if not isinstance(batch_grouping_results_json, list):
-                raise ValueError("Input batch_grouping_results_json must be a list.")
-                
-            if not batch_grouping_results_json:
-                # Handle case of empty but valid list
-                logger.warning("Received empty list of batch results. Returning empty strategy.")
-                empty_strategy = PRGroupingStrategy(
-                    strategy_type=GroupingStrategyType.MIXED, 
-                    groups=[], 
-                    explanation="No batch results provided."
-                )
-                output = GroupMergingOutput(
-                    merged_grouping_strategy=empty_strategy, 
-                    unmerged_files=[], 
-                    notes="Empty input batch list."
-                )
-                return output.model_dump_json(indent=2)
-            
-            # Sanitize original repository analysis JSON
-            original_repository_analysis_json = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', original_repository_analysis_json)
-                
-            if not self._validate_json_string(original_repository_analysis_json):
-                raise ValueError("Invalid original_repository_analysis_json provided")
 
-            # --- Deserialize and Validate Batch Results with improved cleaning ---
-            batch_results: List[Dict[str, Any]] = []
-            for idx, result_json in enumerate(batch_grouping_results_json):
-                # Clean up control characters
-                sanitized_result_json = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', result_json)
-                
-                if not self._validate_json_string(sanitized_result_json):
-                    logger.warning(f"Skipping invalid batch result JSON at index {idx}")
+        final_pr_groups: List[PRGroup] = []
+        all_grouped_files: Set[str] = set()
+        overall_explanation = "Merged groups from batches.\n"
+        strategy_type_value = "mixed" # Default
+        batch_results_dicts: List[Dict[str, Any]] = [] # To store parsed dicts
+
+        try:
+            # --- Clean and Parse Inputs ---
+            cleaned_batch_results_str = self._clean_json_string(batch_grouping_results_json)
+            cleaned_repo_analysis_str = self._clean_json_string(original_repository_analysis_json)
+
+            if not cleaned_batch_results_str:
+                 raise ValueError("Invalid or empty batch_grouping_results_json provided.")
+            if not cleaned_repo_analysis_str:
+                 raise ValueError("Invalid or empty original_repository_analysis_json provided.")
+
+            # Parse the batch results string into a list of dictionaries
+            try:
+                batch_results_parsed = json.loads(cleaned_batch_results_str)
+                if not isinstance(batch_results_parsed, list):
+                     raise TypeError("Parsed batch_grouping_results_json is not a list.")
+                # Further check if list items are dictionaries (optional, handled below)
+                batch_results_dicts = [item for item in batch_results_parsed if isinstance(item, dict)]
+                logger.info(f"Successfully parsed {len(batch_results_dicts)} batch result dictionaries from JSON string.")
+            except (json.JSONDecodeError, TypeError) as e:
+                raise ValueError(f"Failed to parse batch_grouping_results_json string into a list: {e}") from e
+
+            if not batch_results_dicts:
+                 logger.warning("Parsed batch results list is empty or contains no dictionaries.")
+                 empty_strategy = PRGroupingStrategy(strategy_type=GroupingStrategyType.MIXED, groups=[], explanation="No valid batch results provided.")
+                 return empty_strategy.model_dump_json(indent=2)
+
+            original_file_paths = self._extract_file_paths(cleaned_repo_analysis_str)
+            if not original_file_paths:
+                 logger.warning("Could not extract any file paths from original_repository_analysis_json.")
+
+            # --- Merging Logic (operates on dictionaries) ---
+            merged_groups_dicts: List[Dict[str, Any]] = []
+
+            for batch_dict in batch_results_dicts:
+                if not isinstance(batch_dict, dict) or "groups" not in batch_dict:
+                    logger.warning(f"Skipping invalid batch result dictionary: {str(batch_dict)[:100]}...")
                     continue
-                    
-                try:
-                    # Explicitly parse through JSON first for additional validation
-                    parsed_json = json.loads(sanitized_result_json)
-                    batch_results.append(parsed_json)
-                except Exception as e:
-                    logger.warning(f"Failed to parse batch result JSON: {e}")
-                    continue
-            
-            if not batch_results:
-                logger.warning("No valid batch results found. Returning empty strategy.")
-                empty_strategy = PRGroupingStrategy(
-                    strategy_type=GroupingStrategyType.MIXED, 
-                    groups=[], 
-                    explanation="No valid batch results provided."
-                )
-                output = GroupMergingOutput(
-                    merged_grouping_strategy=empty_strategy, 
-                    unmerged_files=[], 
-                    notes="No valid batch results."
-                )
-                return output.model_dump_json(indent=2)
-            
-            # Extract file paths from original repository analysis
-            original_file_paths = set(self._extract_file_paths(original_repository_analysis_json))
-            
-            # --- Merging Logic ---
-            merged_groups: List[Dict[str, Any]] = []
-            all_grouped_files: Set[str] = set()
-            overall_explanation = "Merged groups from batches.\n"
-            strategy_type_value = "mixed"  # Default
-            
-            for batch_result in batch_results:
-                # Get strategy type from first valid batch if not set
-                if strategy_type_value == "mixed":
-                    strategy_type_value = batch_result.get("strategy_type", "mixed")
-                
-                # Extract and merge groups
-                groups = batch_result.get("groups", [])
-                merged_groups.extend(groups)
-                
-                # Add explanation
-                batch_explanation = batch_result.get("explanation", "No explanation")
-                overall_explanation += f"\nBatch ({strategy_type_value}): {batch_explanation}"
-                
-                # Track all files in groups
-                for group in groups:
-                    files = group.get("files", [])
-                    if files:
-                        all_grouped_files.update(f for f in files if isinstance(f, str))
-            
-            logger.info(f"Initially merged {len(merged_groups)} groups covering {len(all_grouped_files)} files.")
-            
+
+                if strategy_type_value == "mixed": strategy_type_value = batch_dict.get("strategy_type", "mixed")
+                groups_in_batch = batch_dict.get("groups", [])
+                if isinstance(groups_in_batch, list): merged_groups_dicts.extend(g for g in groups_in_batch if isinstance(g, dict))
+                batch_explanation = batch_dict.get("explanation", "No explanation")
+                overall_explanation += f"\nBatch ({batch_dict.get('strategy_type', 'N/A')}): {batch_explanation}"
+                for group_dict in groups_in_batch:
+                    if isinstance(group_dict, dict):
+                        files = group_dict.get("files", [])
+                        if isinstance(files, list): all_grouped_files.update(f for f in files if isinstance(f, str))
+
+            logger.info(f"Initially merged {len(merged_groups_dicts)} group dictionaries covering {len(all_grouped_files)} files.")
+
             # --- Deduplication ---
-            final_groups: List[Dict[str, Any]] = []
+            final_groups_dicts: List[Dict[str, Any]] = []
             seen_files: Set[str] = set()
-            
-            for group in merged_groups:
-                files = group.get("files", [])
+            for group_dict in merged_groups_dicts:
+                files = group_dict.get("files", [])
                 if files and isinstance(files, list):
                     unique_files_in_group = [f for f in files if isinstance(f, str) and f not in seen_files]
                     if unique_files_in_group:
-                        # Create new group with unique files
-                        new_group = dict(group)
-                        new_group["files"] = unique_files_in_group
-                        final_groups.append(new_group)
-                        seen_files.update(unique_files_in_group)
-            
+                        new_group_dict = dict(group_dict); new_group_dict["files"] = unique_files_in_group
+                        final_groups_dicts.append(new_group_dict); seen_files.update(unique_files_in_group)
+
             unmerged_files = list(original_file_paths - seen_files)
-            notes = f"Merged {len(batch_results)} batches (using strategy: {strategy_type_value}). " \
-                    f"Found {len(unmerged_files)} unmerged files after deduplication."
-            
-            if unmerged_files:
-                logger.warning(f"Unmerged files after merge: {len(unmerged_files)}")
-            
+            notes = f"Merged {len(batch_results_dicts)} batches. Found {len(unmerged_files)} unmerged files."
+            if unmerged_files: logger.warning(f"{notes}")
+
             # --- Convert to Pydantic Models ---
-            try:
-                strategy_type_enum = GroupingStrategyType(strategy_type_value)
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid strategy type '{strategy_type_value}'. Defaulting to MIXED.")
-                strategy_type_enum = GroupingStrategyType.MIXED
-            
-            # Create PRGroup objects with validation
-            final_pr_groups = []
-            for group_dict in final_groups:
-                try:
-                    # Basic validation before conversion
-                    if not isinstance(group_dict.get("files", []), list):
-                        continue
-                        
-                    # Ensure all files are strings
-                    files = [f for f in group_dict.get("files", []) if isinstance(f, str)]
-                    
-                    pr_group = PRGroup(
-                        title=group_dict.get("title", "Untitled Group"),
-                        files=files,
-                        rationale=group_dict.get("rationale", "No rationale provided"),
-                        estimated_size=group_dict.get("estimated_size", len(files)),
-                        directory_focus=group_dict.get("directory_focus"),
-                        feature_focus=group_dict.get("feature_focus"),
-                        suggested_branch_name=group_dict.get("suggested_branch_name"),
-                        suggested_pr_description=group_dict.get("suggested_pr_description")
-                    )
-                    final_pr_groups.append(pr_group)
-                except Exception as e:
-                    logger.warning(f"Error converting group to PRGroup: {e}")
-                    continue
-            
+            # ... (Keep the conversion logic from PRGroup dictionaries to Pydantic objects as before) ...
+            try: strategy_type_enum = GroupingStrategyType(strategy_type_value)
+            except: strategy_type_enum = GroupingStrategyType.MIXED
+            for group_dict in final_groups_dicts:
+                 try:
+                     files = [f for f in group_dict.get("files", []) if isinstance(f, str)]
+                     if not files: continue
+                     if "title" not in group_dict: group_dict["title"] = "Untitled Merged Group"
+                     pr_group = PRGroup(title=str(group_dict.get("title")), files=files, rationale=str(group_dict.get("rationale", "Merged.")), estimated_size=int(group_dict.get("estimated_size", len(files))), directory_focus=group_dict.get("directory_focus"), feature_focus=group_dict.get("feature_focus"), suggested_branch_name=group_dict.get("suggested_branch_name"), suggested_pr_description=group_dict.get("suggested_pr_description"))
+                     final_pr_groups.append(pr_group)
+                 except (ValidationError, TypeError) as e: logger.warning(f"Skipping group due to Pydantic error: {e}. Group: {str(group_dict)[:100]}...")
+
             # --- Create final strategy ---
-            try:
-                merged_strategy = PRGroupingStrategy(
-                    strategy_type=strategy_type_enum,
-                    groups=final_pr_groups,
-                    explanation=overall_explanation.strip(),
-                    estimated_review_complexity=5.0,
-                    ungrouped_files=unmerged_files
-                )
-                
-                # Validate the result by serializing and parsing
-                result_json = merged_strategy.model_dump_json(indent=2)
-                json.loads(result_json)  # Verify it's valid JSON
-                logger.info(f"Successfully created merged strategy with {len(final_pr_groups)} groups")
-                
-                return result_json
-                
-            except Exception as e:
-                # If validation fails, return a simplified error result
-                logger.error(f"Error validating merged strategy: {e}")
-                error_strategy = PRGroupingStrategy(
-                    strategy_type=GroupingStrategyType.MIXED,
-                    groups=[],
-                    explanation=f"Merging failed during validation: {e}",
-                    ungrouped_files=[]
-                )
-                return error_strategy.model_dump_json(indent=2)
-            
+            merged_strategy = PRGroupingStrategy(strategy_type=strategy_type_enum, groups=final_pr_groups, explanation=overall_explanation.strip() + "\n" + notes, estimated_review_complexity=self._estimate_final_complexity(final_pr_groups), ungrouped_files=unmerged_files)
+            result_json = merged_strategy.model_dump_json(indent=2); json.loads(result_json) # Validate output
+            logger.info(f"Successfully created merged strategy JSON with {len(final_pr_groups)} groups.")
+            return result_json
+
         except Exception as e:
-            error_msg = f"Error in GroupMergingTool: {e}"
-            logger.error(error_msg, exc_info=True)
-            
-            error_strategy = PRGroupingStrategy(
-                strategy_type=GroupingStrategyType.MIXED,
-                groups=[],
-                explanation=f"Merging failed: {e}",
-                ungrouped_files=[]
-            )
-            return error_strategy.model_dump_json(indent=2)
+             error_msg = f"Error in GroupMergingTool: {e}"
+             logger.error(error_msg, exc_info=True)
+             error_strategy = PRGroupingStrategy(strategy_type=GroupingStrategyType.MIXED, groups=[], explanation=f"Merging failed: {e}", ungrouped_files=[])
+             return error_strategy.model_dump_json(indent=2)
+
+    def _estimate_final_complexity(self, groups: List[PRGroup]) -> float:
+         if not groups: return 1.0
+         group_count = len(groups); total_files = sum(len(g.files) for g in groups if g.files); max_files = max((len(g.files) for g in groups if g.files), default=0)
+         complexity = 1.0 + (group_count * 0.6) + (total_files * 0.08) + (max_files * 0.04)
+         return min(10.0, max(1.0, round(complexity, 1)))
