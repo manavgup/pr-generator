@@ -1,0 +1,4 @@
+workflows:
+  pr_creation_workflow:
+    description: Analyze repository and create PRs
+    config_path: workflows/langgraph_configs/pr_creation.yaml

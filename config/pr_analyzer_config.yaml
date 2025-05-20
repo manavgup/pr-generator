@@ -1,0 +1,41 @@
+server:
+  name: pr-analyzer
+  version: 1.0.0
+  port: 8080
+
+analysis:
+  max_files_per_pr: 30
+  max_pr_size_mb: 50
+  exclude_patterns:
+    - "*.log"
+    - "*.tmp"
+    - "node_modules/*"
+    - ".git/*"
+
+strategies:
+  semantic_grouping:
+    enabled: true
+    llm_model: "gpt-4"
+    temperature: 0.3
+    prompt_template: "semantic_grouping_v1"
+  
+  directory_based:
+    enabled: true
+    max_depth: 3
+    min_files_per_dir: 2
+  
+  dependency_analysis:
+    enabled: true
+    languages:
+      - python
+      - javascript
+      - typescript
+
+validation_rules:
+  - name: size_check
+    max_files: 50
+    max_size_mb: 100
+  - name: conflict_check
+    check_dependencies: true
+  - name: test_coverage
+    require_tests: true

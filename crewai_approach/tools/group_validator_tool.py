@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from shared.utils.logging_utils import get_logger
 from .base_tool import BaseRepoTool
-from models.agent_models import PRGroupingStrategy, PRValidationResult, GroupValidationIssue, GroupingStrategyType
+from crewai_approach.models.agent_models import PRGroupingStrategy, PRValidationResult, GroupValidationIssue, GroupingStrategyType
 
 logger = get_logger(__name__)
 

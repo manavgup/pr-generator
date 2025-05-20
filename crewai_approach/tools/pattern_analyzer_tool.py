@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
-from models.agent_models import PatternAnalysisResult
+from crewai_approach.models.agent_models import PatternAnalysisResult
 from shared.utils.logging_utils import get_logger
 from .base_tool import BaseRepoTool
 

@@ -1,0 +1,7 @@
+mcp_servers:
+  pr-analyzer:
+    url: localhost:8080
+    protocol: grpc
+  github:
+    command: npx
+    args: ["-y", "@github/github-mcp-server"]

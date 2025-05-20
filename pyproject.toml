@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pr-generator"
+version = "0.1.0"
+description = "PR Generator Tool"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+dependencies = [
+    # Core dependencies from setup.py
+    "fastmcp",
+    "pydantic>=2.0",
+    "PyYAML>=6.0",
+    "structlog",
+    
+    # Dependencies from requirements.txt
+    "requests>=2.31.0",
+    "openai>=1.0.0",
+    "crewai>=0.26.0",
+    "pygithub>=1.59.0",
+    "tabulate>=0.9.0",
+    "python-dotenv>=1.0.0",
+    "logging>=0.4.9",
+    "argparse>=1.4.0",
+]
+
+[project.urls]
+"Repository" = "https://github.com/manavgup/pr-generator"
+
+# Note: The following GitHub dependency from requirements.txt needs to be installed separately:
+# pip install git+https://github.com/manavgup/llm-clients.git
+
+[project.optional-dependencies]
+mcp-server = [
+    "fastmcp",
+    "pathlib",
+    "typing-extensions>=4.0",
+    "redis>=4.0",
+    "aiofiles>=0.8",
+]
+
+monitoring = [
+    "prometheus-client>=0.12",
+    "opentelemetry-api>=1.0",
+    "opentelemetry-sdk>=1.0",
+    "opentelemetry-exporter-otlp>=1.0",
+]
+
+dev = [
+    "pytest",
+    "pytest-cov",
+    "black",
+    "isort",
+    "flake8",
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+include = ["*"]
+exclude = ["venv*", "build", "dist", "*.egg-info"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.json", "*.md"]
+
+[tool.black]
+line-length = 88
+target-version = ["py38"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"

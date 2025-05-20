@@ -1,0 +1,12 @@
+# config/environments/production.yaml
+server:
+  port: 8443
+
+logging:
+  level: WARNING
+  file: /var/log/pr-analyzer/server.log
+
+security:
+  enabled: true
+  auth_required: true
+  jwt_public_key: /secrets/jwt_public.pem

@@ -71,6 +71,21 @@ pr-generator/
 
 ---
 
+## 📦 Package Migration
+
+The project has been migrated from `setup.py` to `pyproject.toml` for modern Python packaging:
+
+- **Why the change?** PEP 621 introduced `pyproject.toml` as the new standard for Python package metadata, offering a more structured and comprehensive way to define package configuration.
+- **Benefits:**
+  - Cleaner dependency management with optional dependency groups
+  - Better integration with modern Python tooling
+  - Standardized configuration for development tools (black, isort, pytest)
+  - Improved package discovery and data file handling
+
+The migration maintains backward compatibility while adding new features like optional dependency groups for MCP servers and monitoring tools.
+
+---
+
 ## 🧩 Setup
 
 ### Python Version
@@ -84,11 +99,46 @@ python -m venv venv
 source venv/bin/activate
 ```
 
-### Install Dependencies (for `crewai_approach/`)
+### Installation Options
+
+#### Option 1: Install Package (Recommended)
+
+The project now uses `pyproject.toml` for package configuration:
 
 ```bash
-pip install -r crewai_approach/requirements.txt
+# Install the package in development mode
+pip install -e .
+
+# Install with optional dependencies
+pip install -e ".[mcp-server,monitoring,dev]"
+
+# Install GitHub dependency (required)
+pip install git+https://github.com/manavgup/llm-clients.git
 ```
+
+#### Option 2: Install Dependencies Directly
+
+For quick testing without installing the package:
+
+```bash
+pip install -r requirements.txt
+```
+
+For MCP server development:
+
+```bash
+pip install -r mcp_servers/requirements.txt
+```
+
+### Verify Installation
+
+After installing the package, you can verify that it's correctly installed by running the test script:
+
+```bash
+python test_install.py
+```
+
+This script will attempt to import key modules from the package and report any issues.
 
 ### Environment Variables
 

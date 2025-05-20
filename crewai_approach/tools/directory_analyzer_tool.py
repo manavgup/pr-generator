@@ -9,7 +9,7 @@ import json
 from pydantic import BaseModel, Field, ValidationError
 
 from shared.utils.logging_utils import get_logger
-from models.agent_models import DirectoryAnalysisResult, DirectoryComplexity, ParentChildRelation, PotentialFeatureDirectory
+from crewai_approach.models.agent_models import DirectoryAnalysisResult, DirectoryComplexity, ParentChildRelation, PotentialFeatureDirectory
 from .base_tool import BaseRepoTool
 
 logger = get_logger(__name__)
