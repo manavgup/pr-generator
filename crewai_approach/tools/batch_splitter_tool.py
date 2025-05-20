@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 import json
 
 from .base_tool import BaseRepoTool 
-from models.batching_models import BatchSplitterOutput
+from crewai_approach.models.batching_models import BatchSplitterOutput
 from shared.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)

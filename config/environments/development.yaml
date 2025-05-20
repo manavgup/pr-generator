@@ -1,0 +1,10 @@
+# config/environments/development.yaml
+server:
+  port: 8080
+
+logging:
+  level: DEBUG
+
+security:
+  enabled: false
+  auth_required: false

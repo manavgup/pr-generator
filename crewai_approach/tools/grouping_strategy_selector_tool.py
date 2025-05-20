@@ -8,7 +8,7 @@ from collections import defaultdict
 from pydantic import Field, BaseModel, ValidationError
 
 # Import Pydantic models and Enum
-from models.agent_models import GroupingStrategyDecision, StrategyRecommendation, GroupingStrategyType
+from crewai_approach.models.agent_models import GroupingStrategyDecision, StrategyRecommendation, GroupingStrategyType
 from shared.utils.logging_utils import get_logger
 from .base_tool import BaseRepoTool
 

@@ -6,7 +6,7 @@ from typing import Type, List, Dict, Set, Optional, Any
 from pydantic import BaseModel, Field, ValidationError
 
 from .base_tool import BaseRepoTool
-from models.agent_models import PRGroupingStrategy, PRGroup, GroupingStrategyType
+from crewai_approach.models.agent_models import PRGroupingStrategy, PRGroup, GroupingStrategyType
 from shared.utils.logging_utils import get_logger
 from shared.models.analysis_models import RepositoryAnalysis, FileChange
 

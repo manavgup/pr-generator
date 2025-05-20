@@ -12,13 +12,13 @@ from pydantic import BaseModel, Field, ValidationError
 from .base_tool import BaseRepoTool
 
 # Models needed for internal logic and return type
-from models.agent_models import (
+from crewai_approach.models.agent_models import (
     PRGroupingStrategy, PRGroup, GroupingStrategyType, PatternAnalysisResult,
     GroupingStrategyDecision # For parsing strategy decision
 )
 # Models needed only for DESERIALIZATION inside _run
 from shared.models.analysis_models import RepositoryAnalysis, DirectorySummary, FileChange
-from models.batching_models import BatchSplitterOutput # For parsing batch output
+from crewai_approach.models.batching_models import BatchSplitterOutput # For parsing batch output
 from shared.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
