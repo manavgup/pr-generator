@@ -1,18 +1,20 @@
-Summary
+**Summary**
 
 This project provides a modular FastAPI service that generates structured pull-request descriptions by orchestrating an LLM-driven pipeline via JSON-RPC and Server-Sent Events, fully conforming to the Agent-to-Agent (A2A) protocol with built-in authentication, discovery, and progress tracking  ￼.
 
 ⸻
 
-Introduction
+**Introduction**
+```bash
 	•	The service exposes a FastAPI HTTP API for pull-request description generation, leveraging Python type hints and ASGI performance characteristics  ￼.
 	•	It implements the JSON-RPC 2.0 protocol to receive structured method calls and return results or errors in a standardized format  ￼.
 	•	Real-time progress is published over Server-Sent Events (SSE), enabling clients to receive incremental task updates without polling  ￼.
 	•	The agent advertises its capabilities via a WebFinger discovery endpoint and an Agent Card, per the A2A specification  ￼ ￼.
-
+```
 ⸻
 
-Features
+**Features**
+```bash
 	•	Pull-Request Summary Generation: Invokes an IBM Watsonx LLM to produce a <|python_tag|> tool call, which is executed to generate a detailed PR description.
 	•	Progress Bar: Uses tqdm to display a ten-step progress bar based on “Defining task:” logs from the backend pipeline  ￼.
 	•	Strong Typing: Validates all RPC requests and responses with Pydantic v2 models for schemas and data integrity  ￼.
@@ -22,12 +24,13 @@ Features
 	•	JSON-RPC at /rpc
 	•	SSE Streaming at /rpc/stream  ￼.
 	•	Authentication: Secures endpoints with an X-API-Key header, validated against environment variables.
-
+```
 ⸻
 
-Installation
+**Installation**
+```bash
 	1.	Clone the repository
-
+```
 git clone https://github.com/manavgup/pr-generator-2.git
 cd pr-generator-2
 
@@ -47,7 +50,8 @@ pip install -r requirements.txt
 
 ⸻
 
-Configuration
+**Configuration**
+
 	•	Place your credentials in a .env file at the project root, for example:
 
 WATSONX_URL=<your_ibm_watsonx_url>
@@ -60,7 +64,8 @@ CHROMA_OPENAI_API_KEY=<your_openai_key>
 
 ⸻
 
-Usage
+**Usage**
+
 	1.	Start the server
 
 uvicorn a2a.server:app --host 0.0.0.0 --port 8200 --reload
@@ -79,7 +84,7 @@ Connect to http://127.0.0.1:8200/rpc/stream with an EventSource, ensuring you in
 
 ⸻
 
-Architecture
+**Architecture**
 	•	LLM Integration: Uses langchain_ibm.ChatWatsonx for requests and responses, with greedy decoding and configurable token limits.
 	•	CrewAI CLI: Delegates the core PR-generation logic to crewai_approach.run_crew_pr as a subprocess, capturing its ten-step internal workflow.
 	•	Regex Dispatch: Detects tool-invocation strings (git_diff, requests.get, or custom calls) in the LLM output and routes them to the subprocess handler.
@@ -87,7 +92,7 @@ Architecture
 
 ⸻
 
-Endpoints
+**Endpoints**
 
 Path	Method	Description
 /.well-known/agent.json	GET	Agent Card with metadata and capabilities
