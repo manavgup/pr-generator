@@ -54,7 +54,7 @@ pip install -r requirements.txt
 
 **Configuration**
 
-	•	Place your credentials in a .env file at the project root, for example:
+Place your credentials in a .env file at the project root, for example:
 ```bash
 WATSONX_URL=<your_ibm_watsonx_url>
 WATSONX_API_KEY=<your_ibm_api_key>
@@ -62,26 +62,27 @@ WATSONX_PROJECT_ID=<your_project_id>
 CHROMA_OPENAI_API_KEY=<your_openai_key>
 ```
 
-	•	The service will auto-load these variables at startup via python-dotenv.
+The service will auto-load these variables at startup via python-dotenv.
 
 ⸻
 
 **Usage**
-```bash
-	1.	Start the server
-```
-uvicorn a2a.server:app --host 0.0.0.0 --port 8200 --reload
 
+	1.	Start the server
 ```bash
-	2.	Invoke JSON-RPC
+uvicorn a2a.server:app --host 0.0.0.0 --port 8200 --reload
 ```
+
+	2.	Invoke JSON-RPC
+```bash
 curl -X POST http://127.0.0.1:8200/rpc \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $CHROMA_OPENAI_API_KEY" \
   --data '{"jsonrpc":"2.0","id":1,"method":"recommendPR","params":{"repo_path":"/path/to/repo"}}'
+```
 
-```bash
 	3.	Stream progress via SSE
+```bash
 Connect to http://127.0.0.1:8200/rpc/stream with an EventSource, ensuring you include the same X-API-Key header.
 ```
 ⸻
