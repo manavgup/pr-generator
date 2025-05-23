@@ -34,14 +34,16 @@ This project provides a modular FastAPI service that generates structured pull-r
 git clone https://github.com/manavgup/pr-generator-2.git
 cd pr-generator-2
 
-
+```bash
 	2.	Create and activate a virtual environment
+```
 
 python3 -m venv .venv
 source .venv/bin/activate
 
-
+```bash
 	3.	Install dependencies
+```
 
 pip install -e .
 pip install -r requirements.txt
@@ -53,53 +55,54 @@ pip install -r requirements.txt
 **Configuration**
 
 	•	Place your credentials in a .env file at the project root, for example:
-
+```bash
 WATSONX_URL=<your_ibm_watsonx_url>
 WATSONX_API_KEY=<your_ibm_api_key>
 WATSONX_PROJECT_ID=<your_project_id>
 CHROMA_OPENAI_API_KEY=<your_openai_key>
-
+```
 
 	•	The service will auto-load these variables at startup via python-dotenv.
 
 ⸻
 
 **Usage**
-
+```bash
 	1.	Start the server
-
+```
 uvicorn a2a.server:app --host 0.0.0.0 --port 8200 --reload
 
-
+```bash
 	2.	Invoke JSON-RPC
-
+```
 curl -X POST http://127.0.0.1:8200/rpc \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $CHROMA_OPENAI_API_KEY" \
   --data '{"jsonrpc":"2.0","id":1,"method":"recommendPR","params":{"repo_path":"/path/to/repo"}}'
 
-
+```bash
 	3.	Stream progress via SSE
 Connect to http://127.0.0.1:8200/rpc/stream with an EventSource, ensuring you include the same X-API-Key header.
-
+```
 ⸻
 
 **Architecture**
+```bash
 	•	LLM Integration: Uses langchain_ibm.ChatWatsonx for requests and responses, with greedy decoding and configurable token limits.
 	•	CrewAI CLI: Delegates the core PR-generation logic to crewai_approach.run_crew_pr as a subprocess, capturing its ten-step internal workflow.
 	•	Regex Dispatch: Detects tool-invocation strings (git_diff, requests.get, or custom calls) in the LLM output and routes them to the subprocess handler.
 	•	Temporary Cloning: For remote repos, performs a shallow git clone into a temp directory; for local paths, operates in-place.
-
+```
 ⸻
 
 **Endpoints**
-
+```bash
 Path	Method	Description
 /.well-known/agent.json	GET	Agent Card with metadata and capabilities
 /.well-known/webfinger	GET	WebFinger discovery following A2A spec
 /rpc	POST	JSON-RPC 2.0 method call for recommendPR
 /rpc/stream	GET	SSE stream of progress events (start, progress, complete)
-
+```
 
 ⸻
 
