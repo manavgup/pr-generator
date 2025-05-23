@@ -25,7 +25,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "logging>=0.4.9",
     "argparse>=1.4.0",
-]
+    ]
 
 [project.urls]
 "Repository" = "https://github.com/manavgup/pr-generator"
