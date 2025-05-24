@@ -12,7 +12,7 @@ from .models.agent_models import (
     RepositoryMetrics, PatternAnalysisResult, GroupingStrategyDecision,
     PRGroupingStrategy, PRValidationResult # PRGroupingStrategy needed for new task output
 )
-from models.batching_models import BatchSplitterOutput
+from crewai_approach.models.batching_models import BatchSplitterOutput
 from shared.models.analysis_models import RepositoryAnalysis
 
 # --- Tool Imports ---
