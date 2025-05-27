@@ -116,3 +116,6 @@ old_src/
 
 # Old files
 crewai_approach/pr_generator_old/notebooks/wxO_api/telus-kb-transformation/
+mcp-change-analyzer/
+mcp-pr-recommender/
+output/
